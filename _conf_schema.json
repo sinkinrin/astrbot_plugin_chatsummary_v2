@@ -1,0 +1,94 @@
+{
+  "prompt": {
+    "description": "提示词",
+    "type": "string",
+    "hint": "在此编写 LLM 的系统提示词，支持使用 \\n 分行",
+    "default": "- Role: 群聊消息总结专家\n- Background: 你需要阅读用户提供的群聊记录，提取关键信息并输出结构化总结，突出结论、TODO、提醒和时间范围，避免隐私泄露。\n- Skills: 精准提炼议题、时间、参与者、待办及负责人，能合并重复信息并保持条理。\n- Constraints: 不要编造内容；忽略机器人唤醒词及无意义信息；必要时匿名化用户；不要使用 Markdown；回复保持简短而优美。\n- OutputFormat:\n  1. 重要通知与结论（含时间范围/触发人）\n  2. 讨论要点 / 争议\n  3. 有趣片段（可选）\n  4. TODO / 待跟进（负责人、时间，如无则写“未指定”）\n- 如果记录为空或无法总结，请简短说明原因。"
+  },
+  "limits": {
+    "description": "限制：控制一次拉取的记录数量和模型输出长度",
+    "type": "object",
+    "items": {
+      "max_chat_records": {
+        "description": "聊天记录条数上限",
+        "type": "int",
+        "default": 200,
+        "hint": "建议 100~500，过大可能导致接口变慢或超时"
+      },
+      "max_tokens": {
+        "description": "LLM 输出 token 上限",
+        "type": "int",
+        "default": 2000,
+        "hint": "粗略对应输出字符数：token * 4"
+      }
+    }
+  },
+  "auto_summary": {
+    "description": "自动总结设置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "开启自动总结",
+        "type": "bool",
+        "default": false
+      },
+      "interval_minutes": {
+        "description": "执行间隔(分钟)",
+        "type": "int",
+        "default": 60,
+        "hint": "定时任务的轮询间隔"
+      },
+      "target_groups": {
+        "description": "需要自动总结的群号",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "hint": "支持多个群号，可用逗号或换行分隔"
+      },
+      "min_member_level": {
+        "description": "最低群等级",
+        "type": "int",
+        "default": 0,
+        "hint": "仅统计等级不低于该值的成员消息，设为 0 表示不过滤（注意：部分 OneBot 实现不返回群等级信息）"
+      },
+      "summary_mode": {
+        "description": "总结分段方式",
+        "type": "string",
+        "default": "message_count",
+        "hint": "message_count=按消息数分段，time_window=按时间窗口分段"
+      },
+      "message_chunk_size": {
+        "description": "消息分段大小",
+        "type": "int",
+        "default": 30,
+        "hint": "summary_mode=message_count 时，每段包含的消息数"
+      },
+      "time_window_minutes": {
+        "description": "时间窗口(分钟)",
+        "type": "int",
+        "default": 15,
+        "hint": "summary_mode=time_window 时的窗口大小（分钟）"
+      },
+      "broadcast": {
+        "description": "完成后发送到群聊",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，自动总结会以合并转发的形式发送到目标群；关闭则仅写入文件"
+      },
+      "min_messages": {
+        "description": "最少消息数",
+        "type": "int",
+        "default": 5,
+        "hint": "新消息数量少于此值时跳过总结，避免频繁触发"
+      },
+      "provider_id": {
+        "description": "指定 LLM 提供商 ID",
+        "type": "string",
+        "default": "",
+        "hint": "留空使用默认 LLM。填写你在 AstrBot「大语言模型」页面添加模型时设置的 ID（即配置项中的 id 字段值，如 'openai'、'gemini' 等）"
+      }
+    }
+  }
+}

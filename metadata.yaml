@@ -1,0 +1,9 @@
+name: astrbot_plugin_chatsummary
+desc: 一个基于 LLM 的群聊/私聊消息总结与定时归档插件，支持展开合并转发，支持指定关注话题
+help: |
+  输入 /消息总结 <条数> [关注话题] 或 /群总结 <条数> <群号> [关注话题] 触发；
+  可在 WebUI 配置自动总结、限制与提示词，转发记录也会参与总结。
+  示例：/消息总结 50 技术讨论
+version: v1.3.0
+author: laopanmemz
+repo: https://github.com/laopanmemz/astrbot_plugin_chatsummary
