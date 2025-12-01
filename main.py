@@ -32,9 +32,9 @@ _TYPE_DEFAULTS = {
 
 @register(
     "astrbot_plugin_chatsummary_v2",
-    "laopanmemz",
+    "sinkinrin",
     "基于 LLM 的群聊总结与定时归档插件，支持指定关注话题",
-    "1.3.0",
+    "1.0.0",
 )
 class ChatSummary(Star):
     CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
