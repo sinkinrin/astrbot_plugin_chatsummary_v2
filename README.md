@@ -12,7 +12,7 @@
 ## 安装与部署
 1. 将本插件目录放入 AstrBot 的 `plugins/`，保持 `main.py`、`metadata.yaml`、`_conf_schema.json` 在根目录。
 2. 重启 AstrBot 或在 WebUI 重新加载插件。
-3. 在 WebUI 的“插件配置”中找到 `astrbot_plugin_chatsummary`，按需调整提示词和自动总结开关。
+3. 在 WebUI 的"插件配置"中找到 `astrbot_plugin_chatsummary_v2`，按需调整提示词和自动总结开关。
 
 ## 使用
 

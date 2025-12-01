@@ -31,13 +31,13 @@ _TYPE_DEFAULTS = {
 
 
 @register(
-    "astrbot_plugin_chatsummary",
+    "astrbot_plugin_chatsummary_v2",
     "laopanmemz",
     "基于 LLM 的群聊总结与定时归档插件，支持指定关注话题",
     "1.3.0",
 )
 class ChatSummary(Star):
-    CONFIG_NAMESPACE = "astrbot_plugin_chatsummary"
+    CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
     CONFIG_FILE = f"{CONFIG_NAMESPACE}_config.json"
 
     def __init__(self, context: Context, config: dict | None = None):

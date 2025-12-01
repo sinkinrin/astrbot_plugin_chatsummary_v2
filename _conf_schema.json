@@ -13,7 +13,7 @@
         "description": "聊天记录条数上限",
         "type": "int",
         "default": 200,
-        "hint": "建议 100~500，过大可能导致接口变慢或超时"
+        "hint": "建议 100~1500，过大可能导致接口变慢或超时"
       },
       "max_tokens": {
         "description": "LLM 输出 token 上限",
