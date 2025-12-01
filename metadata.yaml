@@ -5,5 +5,5 @@ help: |
   可在 WebUI 配置自动总结、限制与提示词，转发记录也会参与总结。
   示例：/消息总结 50 技术讨论
 version: v1.3.0
-author: laopanmemz
+author: sinkinrin
 repo: https://github.com/sinkinrin/astrbot_plugin_chatsummary_v2
