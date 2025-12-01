@@ -57,6 +57,7 @@
 - 插件仅支持 aiocqhttp 适配器。
 - 若提示未配置可用的模型，请检查 AstrBot Provider 设置。
 - 如需自定义格式，可直接修改提示词或调整 `limits/max_tokens` 以控制长度。
-
+- 参考laopanmemz的消息总结插件，因为需求更多而完全重构，故新开v2版而不提交pr
 ## 参考
 - [AstrBot 官方文档](https://astrbot.app)
+- [参考插件](https://github.com/laopanmemz/astrbot_plugin_chatsummary)  
