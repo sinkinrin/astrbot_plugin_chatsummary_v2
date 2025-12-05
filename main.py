@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import copy
+import hashlib
 import json
 import re
 import uuid
@@ -182,7 +183,6 @@ class ChatSummary(Star):
         group_id: str | int,
         *,
         count: int,
-        min_sender_level: int = 0,
     ) -> Tuple[str, List[dict]]:
         payloads = {
             "group_id": self._normalize_group_id(group_id),
@@ -200,10 +200,7 @@ class ChatSummary(Star):
         for msg in messages:
             sender = msg.get("sender", {}) or {}
             sender_id = str(sender.get("user_id", ""))
-            sender_level = self._parse_sender_level(sender.get("level", 0))
             if sender_id == my_id:
-                continue
-            if sender_level < min_sender_level:
                 continue
 
             nickname = sender.get("card") or sender.get("nickname") or "未知用户"
@@ -222,7 +219,6 @@ class ChatSummary(Star):
                     "time": msg_time,
                     "nickname": nickname,
                     "user_id": sender_id,
-                    "level": sender_level,
                     "text": message_text,
                 },
             )
@@ -298,12 +294,6 @@ class ChatSummary(Star):
                 continue
             lines.append(f"[{msg_time}]「{nickname}」: {text}")
         return "\n".join(lines)
-
-    def _parse_sender_level(self, level: Any) -> int:
-        try:
-            return int(level)
-        except (TypeError, ValueError):
-            return 0
 
     def _normalize_group_id(self, group_id: str | int) -> int | str:
         try:
@@ -1070,16 +1060,20 @@ class ChatSummary(Star):
 
         max_records = max(1, settings.get("limits", {}).get("max_chat_records", 200))
         max_tokens = settings.get("limits", {}).get("max_tokens", 2000)
-        min_level = max(0, int(auto_cfg.get("min_member_level", 5)))
         summary_mode = auto_cfg.get("summary_mode", "message_count")
         chunk_size = max(1, int(auto_cfg.get("message_chunk_size", 30)))
         window_minutes = max(1, int(auto_cfg.get("time_window_minutes", 15)))
-        broadcast = str(auto_cfg.get("broadcast", "")).lower() in {"1", "true", "yes", "on"}
+        broadcast_value = auto_cfg.get("broadcast", True)
+        # 支持布尔值和字符串值
+        if isinstance(broadcast_value, bool):
+            broadcast = broadcast_value
+        else:
+            broadcast = str(broadcast_value).lower() in {"1", "true", "yes", "on"}
         min_messages = max(1, int(auto_cfg.get("min_messages", 5)))
 
         instruction = (
             f"请基于已按{'消息数量' if summary_mode == 'message_count' else '时间窗口'}分段的记录进行总结，"
-            "每个分段输出关键议题、重要发言人（附群等级）、时间范围以及需要跟进的事项。"
+            "每个分段输出关键议题、重要发言人、时间范围以及需要跟进的事项。"
             "最后给出全局重点和 TODO，整体内容要突出重点，保持简短优美，不要使用 Markdown。"
         )
 
@@ -1089,14 +1083,13 @@ class ChatSummary(Star):
                     client,
                     group_id,
                     count=max_records,
-                    min_sender_level=min_level,
                 )
             except Exception as exc:
                 logger.error("拉取群 %s 聊天记录失败：%s", group_id, exc)
                 continue
 
             if not structured:
-                logger.info("群 %s 无可总结的消息（过滤等级=%s）。", group_id, min_level)
+                logger.info("群 %s 无可总结的消息。", group_id)
                 continue
 
             # 检查是否有新消息（相比上次总结）
@@ -1182,7 +1175,6 @@ class ChatSummary(Star):
                 outline_text=outline_text or chat_text,
                 messages=structured,
                 summary_mode=summary_mode,
-                min_level=min_level,
             )
             logger.info("自动总结已输出：%s", file_path)
 
@@ -1281,9 +1273,8 @@ class ChatSummary(Star):
             lines.append(f"[Segment {idx}] {start} - {end} | 消息 {len(segment['messages'])}")
             for msg in segment["messages"]:
                 speaker = msg["nickname"]
-                level = msg["level"]
                 timestamp = msg["time"].strftime("%H:%M:%S")
-                lines.append(f"- ({timestamp}) L{level} {speaker}: {msg['text']}")
+                lines.append(f"- ({timestamp}) {speaker}: {msg['text']}")
         return "\n".join(lines)
 
     def _persist_summary_file(
@@ -1295,7 +1286,6 @@ class ChatSummary(Star):
         outline_text: str,
         messages: List[dict],
         summary_mode: str,
-        min_level: int,
     ) -> Path:
         timestamp = datetime.now()
         file_name = f"{self._sanitize_group_id(group_id)}_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
@@ -1309,7 +1299,6 @@ class ChatSummary(Star):
             f"- 生成时间: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}",
             f"- 消息范围: {first_time} ~ {last_time}",
             f"- 采样模式: {'按消息数量分段' if summary_mode == 'message_count' else '按时间窗口分段'}",
-            f"- 过滤等级: ≥ {min_level}",
             "",
             "## AI 总结",
             summary_text.strip() or "（暂无内容）",
@@ -1325,7 +1314,6 @@ class ChatSummary(Star):
 
     def _compute_content_hash(self, messages: List[dict]) -> str:
         """计算消息内容的哈希值，用于检测内容是否有变化。"""
-        import hashlib
         content = "".join(
             f"{msg['time'].isoformat()}:{msg['user_id']}:{msg['text']}"
             for msg in messages

@@ -47,12 +47,6 @@
         "default": [],
         "hint": "支持多个群号，可用逗号或换行分隔"
       },
-      "min_member_level": {
-        "description": "最低群等级",
-        "type": "int",
-        "default": 0,
-        "hint": "仅统计等级不低于该值的成员消息，设为 0 表示不过滤（注意：部分 OneBot 实现不返回群等级信息）"
-      },
       "summary_mode": {
         "description": "总结分段方式",
         "type": "string",
