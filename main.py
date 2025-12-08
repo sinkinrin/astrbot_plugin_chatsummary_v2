@@ -30,12 +30,112 @@ _TYPE_DEFAULTS = {
     "object": {},
 }
 
+# HTML 模板用于渲染总结图片
+_SUMMARY_HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-width: 400px;
+            max-width: 600px;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        .header-icon {
+            font-size: 28px;
+            margin-right: 12px;
+        }
+        .header-title {
+            font-size: 22px;
+            font-weight: 700;
+            color: #333;
+        }
+        .header-time {
+            font-size: 12px;
+            color: #999;
+            margin-left: auto;
+        }
+        .content {
+            font-size: 15px;
+            line-height: 1.8;
+            color: #444;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .content p {
+            margin-bottom: 12px;
+        }
+        .section {
+            margin-bottom: 16px;
+        }
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+        }
+        .section-title::before {
+            content: "";
+            display: inline-block;
+            width: 4px;
+            height: 16px;
+            background: linear-gradient(180deg, #667eea, #764ba2);
+            border-radius: 2px;
+            margin-right: 8px;
+        }
+        .footer {
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid #f0f0f0;
+            font-size: 11px;
+            color: #aaa;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <span class="header-icon">📝</span>
+            <span class="header-title">{{ title }}</span>
+            <span class="header-time">{{ time }}</span>
+        </div>
+        <div class="content">{{ content }}</div>
+        <div class="footer">由 AstrBot 群聊总结插件生成</div>
+    </div>
+</body>
+</html>
+'''
+
 
 @register(
     "astrbot_plugin_chatsummary_v2",
     "sinkinrin",
-    "基于 LLM 的群聊总结与定时归档插件，支持指定关注话题",
-    "1.1.0",
+    "基于 LLM 的群聊总结与定时归档插件，支持图片渲染和指定关注话题",
+    "1.2.0",
 )
 class ChatSummary(Star):
     CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
@@ -674,6 +774,76 @@ class ChatSummary(Star):
             text = f"{text}\n\n📌 聊天要点\n{outline_text.strip()}"
         return event.plain_result(text[:4000])
 
+    async def _send_image_summary(self, event: AstrMessageEvent, summary_text: str, title: str = "群聊总结"):
+        """将总结内容渲染为图片并发送。
+        
+        使用 AstrBot 内置的 html_render 方法将文字渲染为图片。
+        
+        Args:
+            event: 消息事件
+            summary_text: 总结文本
+            title: 标题
+        
+        Returns:
+            MessageResult 或 None
+        """
+        try:
+            # 转义 HTML 特殊字符
+            import html
+            escaped_content = html.escape(summary_text.strip())
+            # 将换行符转换为 HTML 换行
+            escaped_content = escaped_content.replace('\n', '<br>')
+            
+            # 渲染数据
+            render_data = {
+                "title": title,
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "content": escaped_content,
+            }
+            
+            # 调用 AstrBot 内置的 html_render 方法
+            image_url = await self.html_render(
+                _SUMMARY_HTML_TEMPLATE,
+                render_data,
+                options={"type": "png", "full_page": True}
+            )
+            
+            if image_url:
+                logger.info("总结图片渲染成功: %s", image_url)
+                return event.image_result(image_url)
+            else:
+                logger.warning("图片渲染返回空，降级为文本发送")
+                return event.plain_result(summary_text)
+                
+        except Exception as exc:
+            logger.error("图片渲染失败: %s，降级为文本发送", exc)
+            return event.plain_result(summary_text)
+
+    async def _send_summary(self, event: AstrMessageEvent, summary_text: str, outline_text: str = "", title: str = "群聊总结"):
+        """发送总结内容，根据配置选择图片或文本模式。
+        
+        Args:
+            event: 消息事件
+            summary_text: 总结文本
+            outline_text: 聊天要点（可选）
+            title: 标题
+        
+        Returns:
+            MessageResult 或 None
+        """
+        # 检查是否启用图片渲染
+        render_as_image = self.settings.get("render_as_image", False)
+        
+        if render_as_image:
+            # 图片模式：将总结和要点合并渲染
+            full_text = summary_text.strip()
+            if outline_text:
+                full_text = f"{full_text}\n\n📌 聊天要点\n{outline_text.strip()}"
+            return await self._send_image_summary(event, full_text, title)
+        else:
+            # 文本模式：使用合并转发
+            return await self._send_forward_summary(event, summary_text, outline_text)
+
     # ------------------------------------------------------------------
     # LLM helpers
     # ------------------------------------------------------------------
@@ -805,7 +975,7 @@ class ChatSummary(Star):
             umo=event.unified_msg_origin,
             max_tokens=self.settings.get("limits", {}).get("max_tokens", 2000),
         )
-        result = await self._send_forward_summary(event, summary_text)
+        result = await self._send_summary(event, summary_text)
         if result:
             yield result
 
@@ -876,7 +1046,7 @@ class ChatSummary(Star):
             umo=None,
             max_tokens=self.settings.get("limits", {}).get("max_tokens", 2000),
         )
-        result = await self._send_forward_summary(event, summary_text)
+        result = await self._send_summary(event, summary_text)
         if result:
             yield result
 
@@ -926,7 +1096,7 @@ class ChatSummary(Star):
             umo=event.unified_msg_origin,
             max_tokens=self.settings.get("limits", {}).get("max_tokens", 2000),
         )
-        result = await self._send_forward_summary(event, summary_text)
+        result = await self._send_summary(event, summary_text)
         if result:
             yield result
 
