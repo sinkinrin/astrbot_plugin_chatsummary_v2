@@ -4,6 +4,6 @@ help: |
   输入 /消息总结 <条数> [关注话题] 或 /群总结 <条数> <群号> [关注话题] 触发；
   可在 WebUI 配置自动总结、限制与提示词，支持将总结渲染为图片发送。
   示例：/消息总结 50 技术讨论
-version: v1.2.0
+version: v1.2.1
 author: sinkinrin
 repo: https://github.com/sinkinrin/astrbot_plugin_chatsummary_v2

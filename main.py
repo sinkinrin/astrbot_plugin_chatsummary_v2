@@ -30,112 +30,27 @@ _TYPE_DEFAULTS = {
     "object": {},
 }
 
-# HTML 模板用于渲染总结图片
-_SUMMARY_HTML_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body {
-            font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px;
-            min-width: 400px;
-            max-width: 600px;
-        }
-        .container {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 16px;
-            padding: 24px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-        }
-        .header {
-            display: flex;
-            align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 16px;
-            border-bottom: 2px solid #f0f0f0;
-        }
-        .header-icon {
-            font-size: 28px;
-            margin-right: 12px;
-        }
-        .header-title {
-            font-size: 22px;
-            font-weight: 700;
-            color: #333;
-        }
-        .header-time {
-            font-size: 12px;
-            color: #999;
-            margin-left: auto;
-        }
-        .content {
-            font-size: 15px;
-            line-height: 1.8;
-            color: #444;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-        .content p {
-            margin-bottom: 12px;
-        }
-        .section {
-            margin-bottom: 16px;
-        }
-        .section-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: #667eea;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-        }
-        .section-title::before {
-            content: "";
-            display: inline-block;
-            width: 4px;
-            height: 16px;
-            background: linear-gradient(180deg, #667eea, #764ba2);
-            border-radius: 2px;
-            margin-right: 8px;
-        }
-        .footer {
-            margin-top: 20px;
-            padding-top: 16px;
-            border-top: 1px solid #f0f0f0;
-            font-size: 11px;
-            color: #aaa;
-            text-align: center;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <span class="header-icon">📝</span>
-            <span class="header-title">{{ title }}</span>
-            <span class="header-time">{{ time }}</span>
-        </div>
-        <div class="content">{{ content }}</div>
-        <div class="footer">由 AstrBot 群聊总结插件生成</div>
-    </div>
-</body>
-</html>
-'''
+# 图片渲染配置
+_IMAGE_CONFIG = {
+    "width": 600,           # 图片宽度
+    "padding": 30,          # 内边距
+    "title_font_size": 24,  # 标题字号
+    "content_font_size": 18,# 正文字号
+    "line_spacing": 10,     # 行间距
+    "bg_color": (245, 245, 250),      # 背景色 (浅灰紫)
+    "card_color": (255, 255, 255),    # 卡片背景色 (白色)
+    "title_color": (51, 51, 51),      # 标题颜色 (深灰)
+    "content_color": (68, 68, 68),    # 正文颜色 (灰色)
+    "accent_color": (102, 126, 234),  # 强调色 (紫色)
+    "footer_color": (170, 170, 170),  # 页脚颜色 (浅灰)
+}
 
 
 @register(
     "astrbot_plugin_chatsummary_v2",
     "sinkinrin",
     "基于 LLM 的群聊总结与定时归档插件，支持图片渲染和指定关注话题",
-    "1.2.0",
+    "1.2.1",
 )
 class ChatSummary(Star):
     CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
@@ -777,7 +692,7 @@ class ChatSummary(Star):
     async def _send_image_summary(self, event: AstrMessageEvent, summary_text: str, title: str = "群聊总结"):
         """将总结内容渲染为图片并发送。
         
-        使用 AstrBot 内置的 html_render 方法将文字渲染为图片。
+        使用 Pillow 库将文字渲染为图片。
         
         Args:
             event: 消息事件
@@ -785,39 +700,166 @@ class ChatSummary(Star):
             title: 标题
         
         Returns:
-            MessageResult 或 None
+            MessageResult 或 None，如果渲染失败返回 False 表示需要降级
         """
         try:
-            # 转义 HTML 特殊字符
-            import html
-            escaped_content = html.escape(summary_text.strip())
-            # 将换行符转换为 HTML 换行
-            escaped_content = escaped_content.replace('\n', '<br>')
+            # 延迟导入 Pillow
+            try:
+                from PIL import Image, ImageDraw, ImageFont
+            except ImportError:
+                logger.error("图片渲染需要 Pillow 库，请安装: pip install Pillow")
+                return False
             
-            # 渲染数据
-            render_data = {
-                "title": title,
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "content": escaped_content,
-            }
+            cfg = _IMAGE_CONFIG
+            width = cfg["width"]
+            padding = cfg["padding"]
+            content_width = width - 2 * padding
             
-            # 调用 AstrBot 内置的 html_render 方法
-            image_url = await self.html_render(
-                _SUMMARY_HTML_TEMPLATE,
-                render_data,
-                options={"type": "png", "full_page": True}
+            # 尝试加载字体，如果失败则使用默认字体
+            title_font = None
+            content_font = None
+            footer_font = None
+            try:
+                # 尝试常见的中文字体路径
+                font_paths = [
+                    "C:/Windows/Fonts/msyh.ttc",  # 微软雅黑
+                    "C:/Windows/Fonts/simhei.ttf",  # 黑体
+                    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",  # Linux 文泉驿
+                    "/System/Library/Fonts/PingFang.ttc",  # macOS 苹方
+                ]
+                font_path = None
+                for fp in font_paths:
+                    if Path(fp).exists():
+                        font_path = fp
+                        break
+                
+                if font_path:
+                    title_font = ImageFont.truetype(font_path, cfg["title_font_size"])
+                    content_font = ImageFont.truetype(font_path, cfg["content_font_size"])
+                    footer_font = ImageFont.truetype(font_path, 12)
+            except Exception as font_err:
+                logger.warning("加载字体失败: %s，使用默认字体", font_err)
+            
+            # 如果没有成功加载字体，使用默认字体
+            if not title_font:
+                title_font = ImageFont.load_default()
+                content_font = ImageFont.load_default()
+                footer_font = ImageFont.load_default()
+            
+            # 文本自动换行处理
+            def wrap_text(text: str, font, max_width: int) -> list:
+                """将文本按宽度自动换行"""
+                lines = []
+                for paragraph in text.split('\n'):
+                    if not paragraph.strip():
+                        lines.append('')
+                        continue
+                    
+                    current_line = ''
+                    for char in paragraph:
+                        test_line = current_line + char
+                        try:
+                            bbox = font.getbbox(test_line)
+                            text_width = bbox[2] - bbox[0]
+                        except:
+                            text_width = len(test_line) * cfg["content_font_size"]
+                        
+                        if text_width <= max_width:
+                            current_line = test_line
+                        else:
+                            if current_line:
+                                lines.append(current_line)
+                            current_line = char
+                    
+                    if current_line:
+                        lines.append(current_line)
+                
+                return lines
+            
+            # 准备文本内容
+            content_lines = wrap_text(summary_text.strip(), content_font, content_width - 20)
+            time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            footer_text = "由 AstrBot 群聊总结插件生成"
+            
+            # 计算高度
+            try:
+                title_bbox = title_font.getbbox(title)
+                title_height = title_bbox[3] - title_bbox[1]
+                line_height = content_font.getbbox("测试")[3] + cfg["line_spacing"]
+            except:
+                title_height = cfg["title_font_size"] + 5
+                line_height = cfg["content_font_size"] + cfg["line_spacing"]
+            
+            # 总高度 = 上边距 + 标题区域 + 分割线 + 内容区域 + 页脚 + 下边距
+            header_height = title_height + 30  # 标题 + 时间
+            content_height = len(content_lines) * line_height + 20
+            footer_height = 40
+            total_height = padding + header_height + 20 + content_height + footer_height + padding
+            
+            # 创建图片
+            img = Image.new('RGB', (width, total_height), cfg["bg_color"])
+            draw = ImageDraw.Draw(img)
+            
+            # 绘制卡片背景（圆角矩形效果用普通矩形替代）
+            card_margin = 10
+            draw.rectangle(
+                [card_margin, card_margin, width - card_margin, total_height - card_margin],
+                fill=cfg["card_color"],
+                outline=cfg["accent_color"],
+                width=2
             )
             
-            if image_url:
-                logger.info("总结图片渲染成功: %s", image_url)
-                return event.image_result(image_url)
-            else:
-                logger.warning("图片渲染返回空，降级为文本发送")
-                return event.plain_result(summary_text)
+            y = padding + 10
+            
+            # 绘制标题
+            draw.text((padding + 10, y), f"📝 {title}", font=title_font, fill=cfg["title_color"])
+            
+            # 绘制时间（右对齐）
+            try:
+                time_bbox = footer_font.getbbox(time_str)
+                time_width = time_bbox[2] - time_bbox[0]
+            except:
+                time_width = len(time_str) * 8
+            draw.text((width - padding - time_width - 10, y + 5), time_str, font=footer_font, fill=cfg["footer_color"])
+            
+            y += header_height
+            
+            # 绘制分割线
+            draw.line([(padding + 10, y), (width - padding - 10, y)], fill=(240, 240, 240), width=2)
+            y += 20
+            
+            # 绘制内容
+            for line in content_lines:
+                draw.text((padding + 10, y), line, font=content_font, fill=cfg["content_color"])
+                y += line_height
+            
+            # 绘制页脚分割线
+            y += 10
+            draw.line([(padding + 10, y), (width - padding - 10, y)], fill=(240, 240, 240), width=1)
+            y += 10
+            
+            # 绘制页脚（居中）
+            try:
+                footer_bbox = footer_font.getbbox(footer_text)
+                footer_width = footer_bbox[2] - footer_bbox[0]
+            except:
+                footer_width = len(footer_text) * 8
+            footer_x = (width - footer_width) // 2
+            draw.text((footer_x, y), footer_text, font=footer_font, fill=cfg["footer_color"])
+            
+            # 保存图片
+            image_dir = self._summary_storage / "images"
+            image_dir.mkdir(parents=True, exist_ok=True)
+            image_filename = f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.png"
+            image_path = image_dir / image_filename
+            img.save(str(image_path), "PNG", quality=95)
+            
+            logger.info("总结图片生成成功: %s", image_path)
+            return event.image_result(str(image_path))
                 
         except Exception as exc:
-            logger.error("图片渲染失败: %s，降级为文本发送", exc)
-            return event.plain_result(summary_text)
+            logger.error("图片渲染失败: %s，将降级为合并转发", exc)
+            return False  # 返回 False 表示需要降级
 
     async def _send_summary(self, event: AstrMessageEvent, summary_text: str, outline_text: str = "", title: str = "群聊总结"):
         """发送总结内容，根据配置选择图片或文本模式。
@@ -839,10 +881,14 @@ class ChatSummary(Star):
             full_text = summary_text.strip()
             if outline_text:
                 full_text = f"{full_text}\n\n📌 聊天要点\n{outline_text.strip()}"
-            return await self._send_image_summary(event, full_text, title)
-        else:
-            # 文本模式：使用合并转发
-            return await self._send_forward_summary(event, summary_text, outline_text)
+            result = await self._send_image_summary(event, full_text, title)
+            # 如果图片渲染成功，返回结果；如果返回 False 表示失败，降级为合并转发
+            if result is not False:
+                return result
+            logger.info("图片渲染失败，降级为合并转发模式")
+        
+        # 文本模式或图片渲染失败降级：使用合并转发
+        return await self._send_forward_summary(event, summary_text, outline_text)
 
     # ------------------------------------------------------------------
     # LLM helpers
