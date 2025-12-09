@@ -1,0 +1,11 @@
+# AstrBot 群聊总结插件依赖
+# 基础依赖（AstrBot 已包含，无需单独安装）
+# aiohttp
+
+# 图片渲染依赖（可选，仅在启用 render_as_image 时需要）
+html2image>=2.0.0
+
+# 注意：html2image 需要系统安装 Chromium 浏览器
+# Docker/Linux: apt-get install -y chromium chromium-driver
+# Windows: 自动检测已安装的 Chrome/Edge
+# macOS: brew install --cask chromium
