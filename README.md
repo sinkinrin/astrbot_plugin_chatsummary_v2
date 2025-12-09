@@ -14,6 +14,17 @@
 2. 重启 AstrBot 或在 WebUI 重新加载插件。
 3. 在 WebUI 的"插件配置"中找到 `astrbot_plugin_chatsummary_v2`，按需调整提示词和自动总结开关。
 
+### 图片渲染依赖（可选）
+如果启用图片渲染功能（`render_as_image: true`），需要安装以下依赖：
+```bash
+# 安装 html2image
+pip install html2image
+
+# Docker/Linux 还需要安装 Chromium
+apt-get update && apt-get install -y chromium chromium-driver
+```
+图片渲染使用 HTML/CSS 模板，支持完整的中文显示和美观的卡片样式。
+
 ## 使用
 
 ### 基本用法

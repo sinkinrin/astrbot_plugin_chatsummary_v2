@@ -31,20 +31,105 @@ _TYPE_DEFAULTS = {
     "object": {},
 }
 
-# 图片渲染配置
-_IMAGE_CONFIG = {
-    "width": 600,           # 图片宽度
-    "padding": 30,          # 内边距
-    "title_font_size": 24,  # 标题字号
-    "content_font_size": 18,# 正文字号
-    "line_spacing": 10,     # 行间距
-    "bg_color": (245, 245, 250),      # 背景色 (浅灰紫)
-    "card_color": (255, 255, 255),    # 卡片背景色 (白色)
-    "title_color": (51, 51, 51),      # 标题颜色 (深灰)
-    "content_color": (68, 68, 68),    # 正文颜色 (灰色)
-    "accent_color": (102, 126, 234),  # 强调色 (紫色)
-    "footer_color": (170, 170, 170),  # 页脚颜色 (浅灰)
-}
+# 图片渲染 HTML 模板
+_IMAGE_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "WenQuanYi Micro Hei", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100%;
+        }}
+        .card {{
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+            overflow: hidden;
+            max-width: 540px;
+            margin: 0 auto;
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 24px;
+        }}
+        .header h1 {{
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .header .time {{
+            font-size: 13px;
+            opacity: 0.85;
+        }}
+        .content {{
+            padding: 24px;
+            font-size: 15px;
+            line-height: 1.8;
+            color: #333;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }}
+        .content .section {{
+            margin-bottom: 16px;
+        }}
+        .content .section:last-child {{
+            margin-bottom: 0;
+        }}
+        .content .section-title {{
+            font-size: 16px;
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .content ul {{
+            padding-left: 20px;
+        }}
+        .content li {{
+            margin-bottom: 6px;
+        }}
+        .footer {{
+            background: #f8f9fa;
+            padding: 14px 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+            border-top: 1px solid #eee;
+        }}
+        .highlight {{
+            background: linear-gradient(120deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <h1>📝 {title}</h1>
+            <div class="time">{time_range}</div>
+        </div>
+        <div class="content">{content}</div>
+        <div class="footer">由 AstrBot 群聊总结插件生成 · {gen_time}</div>
+    </div>
+</body>
+</html>
+"""
 
 
 @register(
@@ -690,266 +775,129 @@ class ChatSummary(Star):
             text = f"{text}\n\n📌 聊天要点\n{outline_text.strip()}"
         return event.plain_result(text[:4000])
 
-    async def _download_chinese_font(self, save_path: Path) -> str | None:
-        """下载中文字体文件。
+    def _format_content_html(self, summary_text: str) -> str:
+        """将总结文本格式化为 HTML 内容。
         
-        Args:
-            save_path: 保存字体的路径
-            
-        Returns:
-            成功返回字体路径，失败返回 None
+        处理换行、列表项等格式。
         """
-        import aiohttp
+        import html
+        lines = summary_text.strip().split('\n')
+        html_parts = []
         
-        # 使用 Google Fonts 的 Noto Sans SC（思源黑体简体中文）
-        # 这是一个开源免费的中文字体
-        font_urls = [
-            # jsDelivr CDN（国内可访问）
-            "https://cdn.jsdelivr.net/npm/noto-sans-sc@1.0.1/fonts/NotoSansSC-Regular.otf",
-            # 备用：unpkg CDN
-            "https://unpkg.com/noto-sans-sc@1.0.1/fonts/NotoSansSC-Regular.otf",
-            # 备用：GitHub raw（可能需要代理）
-            "https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf",
-        ]
-        
-        if save_path.exists():
-            logger.info("使用缓存的中文字体: %s", save_path)
-            return str(save_path)
-        
-        for url in font_urls:
-            try:
-                logger.info("正在下载中文字体: %s", url)
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                    async with session.get(url) as resp:
-                        if resp.status == 200:
-                            content = await resp.read()
-                            save_path.write_bytes(content)
-                            logger.info("中文字体下载成功，保存至: %s", save_path)
-                            return str(save_path)
-                        else:
-                            logger.warning("字体下载失败，状态码: %s", resp.status)
-            except Exception as e:
-                logger.warning("从 %s 下载字体失败: %s", url, e)
+        for line in lines:
+            line = line.strip()
+            if not line:
+                html_parts.append('<br>')
                 continue
+            
+            # 转义 HTML 特殊字符
+            line = html.escape(line)
+            
+            # 处理列表项（以 - 或 * 或 数字. 开头）
+            if line.startswith('- ') or line.startswith('* '):
+                line = f'<div style="padding-left: 16px;">• {line[2:]}</div>'
+            elif len(line) > 2 and line[0].isdigit() and line[1] == '.':
+                line = f'<div style="padding-left: 16px;">{line}</div>'
+            # 处理 emoji 标题行（如 📌 聊天要点）
+            elif line and ord(line[0]) > 127 and any(kw in line for kw in ['要点', '总结', '话题', '讨论']):
+                line = f'<div class="section-title">{line}</div>'
+            else:
+                line = f'<div>{line}</div>'
+            
+            html_parts.append(line)
         
-        logger.error("所有字体下载源均失败，图片中的中文将无法正常显示")
-        return None
+        return '\n'.join(html_parts)
 
-    async def _send_image_summary(self, event: AstrMessageEvent, summary_text: str, title: str = "群聊总结"):
+    async def _send_image_summary(self, event: AstrMessageEvent, summary_text: str, title: str = "群聊总结", time_range: str = ""):
         """将总结内容渲染为图片并发送。
         
-        使用 Pillow 库将文字渲染为图片。
+        使用 html2image 库将 HTML/CSS 渲染为图片。
         
         Args:
             event: 消息事件
             summary_text: 总结文本
             title: 标题
+            time_range: 时间范围描述（可选）
         
         Returns:
             MessageResult 或 None，如果渲染失败返回 False 表示需要降级
         """
         try:
-            # 延迟导入 Pillow
+            # 延迟导入 html2image
             try:
-                from PIL import Image, ImageDraw, ImageFont
+                from html2image import Html2Image
             except ImportError:
-                logger.error("图片渲染需要 Pillow 库，请安装: pip install Pillow")
+                logger.error("图片渲染需要 html2image 库，请安装: pip install html2image")
                 return False
             
-            cfg = _IMAGE_CONFIG
-            width = cfg["width"]
-            padding = cfg["padding"]
-            content_width = width - 2 * padding
+            # 准备内容
+            content_html = self._format_content_html(summary_text)
+            gen_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+            if not time_range:
+                time_range = f"生成时间: {gen_time}"
             
-            # 尝试加载字体，如果失败则使用默认字体
-            title_font = None
-            content_font = None
-            footer_font = None
-            
-            # 获取插件目录下的字体缓存路径
-            plugin_font_dir = self._summary_storage / "fonts"
-            plugin_font_dir.mkdir(parents=True, exist_ok=True)
-            cached_font_path = plugin_font_dir / "NotoSansSC-Regular.ttf"
-            
-            try:
-                # 尝试常见的中文字体路径（扩展搜索范围）
-                font_paths = [
-                    # 插件缓存的字体（优先）
-                    str(cached_font_path),
-                    # Windows
-                    "C:/Windows/Fonts/msyh.ttc",  # 微软雅黑
-                    "C:/Windows/Fonts/msyhbd.ttc",  # 微软雅黑粗体
-                    "C:/Windows/Fonts/simhei.ttf",  # 黑体
-                    "C:/Windows/Fonts/simsun.ttc",  # 宋体
-                    # Linux 常见路径
-                    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-                    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-                    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
-                    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-                    # Docker/Alpine 常见路径
-                    "/usr/share/fonts/noto/NotoSansSC-Regular.otf",
-                    "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
-                    # macOS
-                    "/System/Library/Fonts/PingFang.ttc",
-                    "/System/Library/Fonts/STHeiti Light.ttc",
-                    "/Library/Fonts/Arial Unicode.ttf",
-                ]
-                
-                font_path = None
-                for fp in font_paths:
-                    if Path(fp).exists():
-                        font_path = fp
-                        logger.debug("找到中文字体: %s", fp)
-                        break
-                
-                # 如果没有找到字体，尝试下载 Noto Sans SC
-                if not font_path:
-                    logger.info("未找到中文字体，尝试下载 Noto Sans SC...")
-                    font_path = await self._download_chinese_font(cached_font_path)
-                
-                if font_path:
-                    title_font = ImageFont.truetype(font_path, cfg["title_font_size"])
-                    content_font = ImageFont.truetype(font_path, cfg["content_font_size"])
-                    footer_font = ImageFont.truetype(font_path, 12)
-                    logger.info("成功加载中文字体: %s", font_path)
-            except Exception as font_err:
-                logger.warning("加载字体失败: %s，使用默认字体（中文可能无法显示）", font_err)
-            
-            # 如果没有成功加载字体，使用默认字体（中文会显示为方框）
-            if not title_font:
-                logger.warning("无法加载中文字体，图片中的中文将无法正常显示！")
-                title_font = ImageFont.load_default()
-                content_font = ImageFont.load_default()
-                footer_font = ImageFont.load_default()
-            
-            # 文本自动换行处理
-            def wrap_text(text: str, font, max_width: int) -> list:
-                """将文本按宽度自动换行"""
-                lines = []
-                for paragraph in text.split('\n'):
-                    if not paragraph.strip():
-                        lines.append('')
-                        continue
-                    
-                    current_line = ''
-                    for char in paragraph:
-                        test_line = current_line + char
-                        try:
-                            bbox = font.getbbox(test_line)
-                            text_width = bbox[2] - bbox[0]
-                        except:
-                            text_width = len(test_line) * cfg["content_font_size"]
-                        
-                        if text_width <= max_width:
-                            current_line = test_line
-                        else:
-                            if current_line:
-                                lines.append(current_line)
-                            current_line = char
-                    
-                    if current_line:
-                        lines.append(current_line)
-                
-                return lines
-            
-            # 准备文本内容
-            content_lines = wrap_text(summary_text.strip(), content_font, content_width - 20)
-            time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            footer_text = "由 AstrBot 群聊总结插件生成"
-            
-            # 计算高度
-            try:
-                title_bbox = title_font.getbbox(title)
-                title_height = title_bbox[3] - title_bbox[1]
-                line_height = content_font.getbbox("测试")[3] + cfg["line_spacing"]
-            except:
-                title_height = cfg["title_font_size"] + 5
-                line_height = cfg["content_font_size"] + cfg["line_spacing"]
-            
-            # 总高度 = 上边距 + 标题区域 + 分割线 + 内容区域 + 页脚 + 下边距
-            header_height = title_height + 30  # 标题 + 时间
-            content_height = len(content_lines) * line_height + 20
-            footer_height = 40
-            total_height = padding + header_height + 20 + content_height + footer_height + padding
-            
-            # 创建图片
-            img = Image.new('RGB', (width, total_height), cfg["bg_color"])
-            draw = ImageDraw.Draw(img)
-            
-            # 绘制卡片背景（圆角矩形效果用普通矩形替代）
-            card_margin = 10
-            draw.rectangle(
-                [card_margin, card_margin, width - card_margin, total_height - card_margin],
-                fill=cfg["card_color"],
-                outline=cfg["accent_color"],
-                width=2
+            # 生成 HTML
+            html_content = _IMAGE_HTML_TEMPLATE.format(
+                title=title,
+                time_range=time_range,
+                content=content_html,
+                gen_time=gen_time
             )
             
-            y = padding + 10
-            
-            # 绘制标题
-            draw.text((padding + 10, y), f"📝 {title}", font=title_font, fill=cfg["title_color"])
-            
-            # 绘制时间（右对齐）
-            try:
-                time_bbox = footer_font.getbbox(time_str)
-                time_width = time_bbox[2] - time_bbox[0]
-            except:
-                time_width = len(time_str) * 8
-            draw.text((width - padding - time_width - 10, y + 5), time_str, font=footer_font, fill=cfg["footer_color"])
-            
-            y += header_height
-            
-            # 绘制分割线
-            draw.line([(padding + 10, y), (width - padding - 10, y)], fill=(240, 240, 240), width=2)
-            y += 20
-            
-            # 绘制内容
-            for line in content_lines:
-                draw.text((padding + 10, y), line, font=content_font, fill=cfg["content_color"])
-                y += line_height
-            
-            # 绘制页脚分割线
-            y += 10
-            draw.line([(padding + 10, y), (width - padding - 10, y)], fill=(240, 240, 240), width=1)
-            y += 10
-            
-            # 绘制页脚（居中）
-            try:
-                footer_bbox = footer_font.getbbox(footer_text)
-                footer_width = footer_bbox[2] - footer_bbox[0]
-            except:
-                footer_width = len(footer_text) * 8
-            footer_x = (width - footer_width) // 2
-            draw.text((footer_x, y), footer_text, font=footer_font, fill=cfg["footer_color"])
-            
-            # 保存图片到内存并转为 base64
-            import base64
-            from io import BytesIO
-            
-            buffer = BytesIO()
-            img.save(buffer, format="PNG")
-            buffer.seek(0)
-            image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            
-            # 同时保存到本地作为备份
+            # 准备输出目录
             image_dir = self._summary_storage / "images"
             image_dir.mkdir(parents=True, exist_ok=True)
             image_filename = f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.png"
-            image_path = image_dir / image_filename
-            img.save(str(image_path), "PNG", quality=95)
             
-            logger.info("总结图片生成成功: %s", image_path)
+            # 配置 html2image
+            hti = Html2Image(
+                output_path=str(image_dir),
+                size=(600, 800),  # 初始大小，会自动调整
+                custom_flags=[
+                    '--no-sandbox',
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                    '--hide-scrollbars',
+                    '--force-device-scale-factor=2',  # 高清渲染
+                ]
+            )
+            
+            # 渲染图片
+            try:
+                paths = hti.screenshot(
+                    html_str=html_content,
+                    save_as=image_filename,
+                    size=(600, 900)  # 宽度固定，高度足够
+                )
+                
+                if not paths:
+                    logger.error("html2image 未返回图片路径")
+                    return False
+                
+                image_path = Path(paths[0])
+                if not image_path.exists():
+                    logger.error("生成的图片文件不存在: %s", image_path)
+                    return False
+                    
+            except Exception as render_err:
+                logger.error("html2image 渲染失败: %s", render_err)
+                return False
+            
+            # 读取图片并转为 base64
+            import base64
+            image_bytes = image_path.read_bytes()
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            
+            logger.info("总结图片生成成功: %s (大小: %d bytes)", image_path, len(image_bytes))
+            
             # 使用 Image 组件和 chain_result 发送 base64 图片
             image_component = ImageComponent(file=f"base64://{image_base64}")
             return event.chain_result([image_component])
                 
         except Exception as exc:
             logger.error("图片渲染失败: %s，将降级为合并转发", exc)
+            import traceback
+            logger.debug("详细错误: %s", traceback.format_exc())
             return False  # 返回 False 表示需要降级
 
     async def _send_summary(self, event: AstrMessageEvent, summary_text: str, outline_text: str = "", title: str = "群聊总结"):
