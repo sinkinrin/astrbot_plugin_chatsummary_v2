@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
+from astrbot.api.message_components import Image as ImageComponent  # 图片消息组件
 from astrbot.api import logger  # 使用 AstrBot 提供的 logger
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
@@ -864,8 +865,9 @@ class ChatSummary(Star):
             img.save(str(image_path), "PNG", quality=95)
             
             logger.info("总结图片生成成功: %s", image_path)
-            # 使用 base64 格式发送图片
-            return event.image_result(f"base64://{image_base64}")
+            # 使用 Image 组件和 chain_result 发送 base64 图片
+            image_component = ImageComponent(file=f"base64://{image_base64}")
+            return event.chain_result([image_component])
                 
         except Exception as exc:
             logger.error("图片渲染失败: %s，将降级为合并转发", exc)
