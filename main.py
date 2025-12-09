@@ -690,6 +690,51 @@ class ChatSummary(Star):
             text = f"{text}\n\n📌 聊天要点\n{outline_text.strip()}"
         return event.plain_result(text[:4000])
 
+    async def _download_chinese_font(self, save_path: Path) -> str | None:
+        """下载中文字体文件。
+        
+        Args:
+            save_path: 保存字体的路径
+            
+        Returns:
+            成功返回字体路径，失败返回 None
+        """
+        import aiohttp
+        
+        # 使用 Google Fonts 的 Noto Sans SC（思源黑体简体中文）
+        # 这是一个开源免费的中文字体
+        font_urls = [
+            # jsDelivr CDN（国内可访问）
+            "https://cdn.jsdelivr.net/npm/noto-sans-sc@1.0.1/fonts/NotoSansSC-Regular.otf",
+            # 备用：unpkg CDN
+            "https://unpkg.com/noto-sans-sc@1.0.1/fonts/NotoSansSC-Regular.otf",
+            # 备用：GitHub raw（可能需要代理）
+            "https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf",
+        ]
+        
+        if save_path.exists():
+            logger.info("使用缓存的中文字体: %s", save_path)
+            return str(save_path)
+        
+        for url in font_urls:
+            try:
+                logger.info("正在下载中文字体: %s", url)
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            content = await resp.read()
+                            save_path.write_bytes(content)
+                            logger.info("中文字体下载成功，保存至: %s", save_path)
+                            return str(save_path)
+                        else:
+                            logger.warning("字体下载失败，状态码: %s", resp.status)
+            except Exception as e:
+                logger.warning("从 %s 下载字体失败: %s", url, e)
+                continue
+        
+        logger.error("所有字体下载源均失败，图片中的中文将无法正常显示")
+        return None
+
     async def _send_image_summary(self, event: AstrMessageEvent, summary_text: str, title: str = "群聊总结"):
         """将总结内容渲染为图片并发送。
         
@@ -720,29 +765,63 @@ class ChatSummary(Star):
             title_font = None
             content_font = None
             footer_font = None
+            
+            # 获取插件目录下的字体缓存路径
+            plugin_font_dir = self._summary_storage / "fonts"
+            plugin_font_dir.mkdir(parents=True, exist_ok=True)
+            cached_font_path = plugin_font_dir / "NotoSansSC-Regular.ttf"
+            
             try:
-                # 尝试常见的中文字体路径
+                # 尝试常见的中文字体路径（扩展搜索范围）
                 font_paths = [
+                    # 插件缓存的字体（优先）
+                    str(cached_font_path),
+                    # Windows
                     "C:/Windows/Fonts/msyh.ttc",  # 微软雅黑
+                    "C:/Windows/Fonts/msyhbd.ttc",  # 微软雅黑粗体
                     "C:/Windows/Fonts/simhei.ttf",  # 黑体
-                    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",  # Linux 文泉驿
-                    "/System/Library/Fonts/PingFang.ttc",  # macOS 苹方
+                    "C:/Windows/Fonts/simsun.ttc",  # 宋体
+                    # Linux 常见路径
+                    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+                    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                    # Docker/Alpine 常见路径
+                    "/usr/share/fonts/noto/NotoSansSC-Regular.otf",
+                    "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
+                    # macOS
+                    "/System/Library/Fonts/PingFang.ttc",
+                    "/System/Library/Fonts/STHeiti Light.ttc",
+                    "/Library/Fonts/Arial Unicode.ttf",
                 ]
+                
                 font_path = None
                 for fp in font_paths:
                     if Path(fp).exists():
                         font_path = fp
+                        logger.debug("找到中文字体: %s", fp)
                         break
+                
+                # 如果没有找到字体，尝试下载 Noto Sans SC
+                if not font_path:
+                    logger.info("未找到中文字体，尝试下载 Noto Sans SC...")
+                    font_path = await self._download_chinese_font(cached_font_path)
                 
                 if font_path:
                     title_font = ImageFont.truetype(font_path, cfg["title_font_size"])
                     content_font = ImageFont.truetype(font_path, cfg["content_font_size"])
                     footer_font = ImageFont.truetype(font_path, 12)
+                    logger.info("成功加载中文字体: %s", font_path)
             except Exception as font_err:
-                logger.warning("加载字体失败: %s，使用默认字体", font_err)
+                logger.warning("加载字体失败: %s，使用默认字体（中文可能无法显示）", font_err)
             
-            # 如果没有成功加载字体，使用默认字体
+            # 如果没有成功加载字体，使用默认字体（中文会显示为方框）
             if not title_font:
+                logger.warning("无法加载中文字体，图片中的中文将无法正常显示！")
                 title_font = ImageFont.load_default()
                 content_font = ImageFont.load_default()
                 footer_font = ImageFont.load_default()
