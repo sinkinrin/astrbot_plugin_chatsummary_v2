@@ -847,7 +847,16 @@ class ChatSummary(Star):
             footer_x = (width - footer_width) // 2
             draw.text((footer_x, y), footer_text, font=footer_font, fill=cfg["footer_color"])
             
-            # 保存图片
+            # 保存图片到内存并转为 base64
+            import base64
+            from io import BytesIO
+            
+            buffer = BytesIO()
+            img.save(buffer, format="PNG")
+            buffer.seek(0)
+            image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            
+            # 同时保存到本地作为备份
             image_dir = self._summary_storage / "images"
             image_dir.mkdir(parents=True, exist_ok=True)
             image_filename = f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.png"
@@ -855,7 +864,8 @@ class ChatSummary(Star):
             img.save(str(image_path), "PNG", quality=95)
             
             logger.info("总结图片生成成功: %s", image_path)
-            return event.image_result(str(image_path))
+            # 使用 base64 格式发送图片
+            return event.image_result(f"base64://{image_base64}")
                 
         except Exception as exc:
             logger.error("图片渲染失败: %s，将降级为合并转发", exc)
