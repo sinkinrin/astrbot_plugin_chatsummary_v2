@@ -1054,11 +1054,15 @@ class ChatSummary(Star):
         base_instruction = "请突出关键议题、明确结论和 TODO，并附上时间范围；回复保持简短优美，不要使用 Markdown。"
         instruction = self._build_topic_instruction(base_instruction, topic)
         
+        # 获取全局配置的 provider_id（用于手动总结命令）
+        global_provider_id = self.settings.get("provider_id", "") or ""
+        
         summary_text = await self._summarize_text(
             chat_text,
             extra_instruction=instruction,
             umo=event.unified_msg_origin,
             max_tokens=self.settings.get("limits", {}).get("max_tokens", 2000),
+            provider_id=global_provider_id if global_provider_id.strip() else None,
         )
         result = await self._send_summary(event, summary_text)
         if result:
@@ -1125,11 +1129,15 @@ class ChatSummary(Star):
         base_instruction = "请突出关键议题、结论、TODO，并注明对应的群成员；回复保持简短优美，不要使用 Markdown。"
         instruction = self._build_topic_instruction(base_instruction, topic)
         
+        # 获取全局配置的 provider_id（用于手动总结命令）
+        global_provider_id = self.settings.get("provider_id", "") or ""
+        
         summary_text = await self._summarize_text(
             chat_text,
             extra_instruction=instruction,
             umo=None,
             max_tokens=self.settings.get("limits", {}).get("max_tokens", 2000),
+            provider_id=global_provider_id if global_provider_id.strip() else None,
         )
         result = await self._send_summary(event, summary_text)
         if result:
@@ -1175,11 +1183,15 @@ class ChatSummary(Star):
         )
         instruction = self._build_topic_instruction(base_instruction, topic)
         
+        # 获取全局配置的 provider_id（用于手动总结命令）
+        global_provider_id = self.settings.get("provider_id", "") or ""
+        
         summary_text = await self._summarize_text(
             chat_text,
             extra_instruction=instruction,
             umo=event.unified_msg_origin,
             max_tokens=self.settings.get("limits", {}).get("max_tokens", 2000),
+            provider_id=global_provider_id if global_provider_id.strip() else None,
         )
         result = await self._send_summary(event, summary_text)
         if result:

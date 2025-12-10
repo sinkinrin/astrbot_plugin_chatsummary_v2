@@ -11,6 +11,12 @@
     "default": false,
     "hint": "开启后，总结内容将渲染成图片发送，而不是文字消息（需要 AstrBot 支持 Playwright）"
   },
+  "provider_id": {
+    "description": "全局指定 LLM 提供商 ID（手动总结使用）",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用默认 LLM。填写你在 AstrBot「大语言模型」页面添加模型时设置的 ID。用于手动触发的「消息总结」「群总结」「转发总结」命令"
+  },
   "limits": {
     "description": "限制：控制一次拉取的记录数量和模型输出长度",
     "type": "object",
