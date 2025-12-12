@@ -43,18 +43,22 @@ _IMAGE_HTML_TEMPLATE = """
             padding: 0;
             box-sizing: border-box;
         }}
+        html, body {{
+            width: 540px;
+            height: auto;
+            overflow: visible;
+        }}
         body {{
             font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "WenQuanYi Micro Hei", sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             padding: 20px;
-            min-height: 100%;
         }}
         .card {{
             background: #ffffff;
             border-radius: 16px;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
             overflow: hidden;
-            max-width: 540px;
+            width: 500px;
             margin: 0 auto;
         }}
         .header {{
@@ -116,6 +120,13 @@ _IMAGE_HTML_TEMPLATE = """
             padding: 2px 6px;
             border-radius: 4px;
         }}
+        .page-indicator {{
+            text-align: center;
+            padding: 8px;
+            font-size: 12px;
+            color: #999;
+            background: #f0f0f0;
+        }}
     </style>
 </head>
 <body>
@@ -125,6 +136,7 @@ _IMAGE_HTML_TEMPLATE = """
             <div class="time">{time_range}</div>
         </div>
         <div class="content">{content}</div>
+        {page_indicator}
         <div class="footer">由 AstrBot 群聊总结插件生成 · {gen_time}</div>
     </div>
 </body>
@@ -136,7 +148,7 @@ _IMAGE_HTML_TEMPLATE = """
     "astrbot_plugin_chatsummary_v2",
     "sinkinrin",
     "基于 LLM 的群聊总结与定时归档插件，支持图片渲染和指定关注话题",
-    "1.2.1",
+    "1.3.0",
 )
 class ChatSummary(Star):
     CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
@@ -783,16 +795,16 @@ class ChatSummary(Star):
         import html
         lines = summary_text.strip().split('\n')
         html_parts = []
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 html_parts.append('<br>')
                 continue
-            
+
             # 转义 HTML 特殊字符
             line = html.escape(line)
-            
+
             # 处理列表项（以 - 或 * 或 数字. 开头）
             if line.startswith('- ') or line.startswith('* '):
                 line = f'<div style="padding-left: 16px;">• {line[2:]}</div>'
@@ -803,102 +815,250 @@ class ChatSummary(Star):
                 line = f'<div class="section-title">{line}</div>'
             else:
                 line = f'<div>{line}</div>'
-            
+
             html_parts.append(line)
-        
+
         return '\n'.join(html_parts)
 
-    async def _send_image_summary(self, event: AstrMessageEvent, summary_text: str, title: str = "群聊总结", time_range: str = ""):
-        """将总结内容渲染为图片并发送。
+    def _estimate_content_height(self, text: str) -> int:
+        """估算内容渲染后的高度（像素）。
         
-        使用 html2image 库将 HTML/CSS 渲染为图片。
+        基于行数和字符数粗略估算，用于动态调整图片高度。
+        """
+        lines = text.split('\n')
+        line_height = 27  # 约 15px 字体 * 1.8 行高
+        base_height = 180  # header + footer + padding
+
+        total_height = base_height
+        for line in lines:
+            # 每行按字符数估算换行次数（假设每行约 28 个中文字符）
+            char_count = len(line)
+            wrapped_lines = max(1, (char_count + 27) // 28)
+            total_height += wrapped_lines * line_height
+
+        # 添加一些余量
+        return int(total_height * 1.1)
+
+    def _split_content_for_pages(self, text: str, max_height: int = 2000) -> List[str]:
+        """将长内容分割成多页。
+
+        Args:
+            text: 原始文本
+            max_height: 单页最大高度（像素）
+
+        Returns:
+            分页后的文本列表
+        """
+        lines = text.split('\n')
+        pages: List[str] = []
+        current_page: List[str] = []
+        current_height = 180  # header + footer 基础高度
+        line_height = 27
+
+        for line in lines:
+            char_count = len(line)
+            wrapped_lines = max(1, (char_count + 27) // 28)
+            line_pixel_height = wrapped_lines * line_height
+
+            if current_height + line_pixel_height > max_height and current_page:
+                # 当前页已满，开始新页
+                pages.append('\n'.join(current_page))
+                current_page = [line]
+                current_height = 180 + line_pixel_height
+            else:
+                current_page.append(line)
+                current_height += line_pixel_height
+
+        if current_page:
+            pages.append('\n'.join(current_page))
+
+        return pages if pages else [text]
+
+    def _cleanup_old_images(self, max_age_hours: int = 24, max_count: int = 100):
+        """清理旧的图片文件。
+
+        Args:
+            max_age_hours: 最大保留时间（小时）
+            max_count: 最大保留数量
+        """
+        image_dir = self._summary_storage / "images"
+        if not image_dir.exists():
+            return
+
+        try:
+            import time
+            now = time.time()
+            max_age_seconds = max_age_hours * 3600
+
+            # 获取所有图片文件
+            image_files = list(image_dir.glob("*.png"))
+
+            # 按修改时间排序（最新的在前）
+            image_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+
+            deleted_count = 0
+            for idx, img_file in enumerate(image_files):
+                file_age = now - img_file.stat().st_mtime
+                # 超过最大数量或超过最大年龄的文件删除
+                if idx >= max_count or file_age > max_age_seconds:
+                    try:
+                        img_file.unlink()
+                        deleted_count += 1
+                    except Exception as e:
+                        logger.debug("删除旧图片失败 %s: %s", img_file, e)
+
+            if deleted_count > 0:
+                logger.info("清理了 %d 个旧图片文件", deleted_count)
+
+        except Exception as e:
+            logger.debug("图片清理过程出错: %s", e)
+
+    async def _render_summary_images(
+        self,
+        summary_text: str,
+        title: str = "群聊总结",
+        time_range: str = "",
+        max_page_height: int = 2000,
+    ) -> List[Path] | None:
+        """渲染总结内容为图片（支持分页）。
         
         Args:
-            event: 消息事件
             summary_text: 总结文本
             title: 标题
-            time_range: 时间范围描述（可选）
+            time_range: 时间范围描述
+            max_page_height: 单页最大高度
         
         Returns:
-            MessageResult 或 None，如果渲染失败返回 False 表示需要降级
+            生成的图片路径列表，失败返回 None
         """
         try:
-            # 延迟导入 html2image
-            try:
-                from html2image import Html2Image
-            except ImportError:
-                logger.error("图片渲染需要 html2image 库，请安装: pip install html2image")
-                return False
-            
-            # 准备内容
-            content_html = self._format_content_html(summary_text)
-            gen_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-            if not time_range:
-                time_range = f"生成时间: {gen_time}"
-            
+            from html2image import Html2Image
+        except ImportError:
+            logger.error("图片渲染需要 html2image 库，请安装: pip install html2image")
+            return None
+
+        # 清理旧图片
+        self._cleanup_old_images()
+
+        gen_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if not time_range:
+            time_range = f"生成时间: {gen_time}"
+
+        # 分页处理
+        pages = self._split_content_for_pages(summary_text, max_page_height)
+        total_pages = len(pages)
+
+        # 准备输出目录
+        image_dir = self._summary_storage / "images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+
+        # 配置 html2image
+        hti = Html2Image(
+            output_path=str(image_dir),
+            custom_flags=[
+                '--no-sandbox',
+                '--disable-gpu',
+                '--disable-dev-shm-usage',
+                '--hide-scrollbars',
+                '--force-device-scale-factor=2',
+            ]
+        )
+
+        image_paths: List[Path] = []
+
+        for page_idx, page_content in enumerate(pages):
+            content_html = self._format_content_html(page_content)
+
+            # 分页指示器
+            if total_pages > 1:
+                page_indicator = f'<div class="page-indicator">第 {page_idx + 1} / {total_pages} 页</div>'
+            else:
+                page_indicator = ''
+
             # 生成 HTML
             html_content = _IMAGE_HTML_TEMPLATE.format(
                 title=title,
                 time_range=time_range,
                 content=content_html,
+                page_indicator=page_indicator,
                 gen_time=gen_time
             )
-            
-            # 准备输出目录
-            image_dir = self._summary_storage / "images"
-            image_dir.mkdir(parents=True, exist_ok=True)
-            image_filename = f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.png"
-            
-            # 配置 html2image
-            hti = Html2Image(
-                output_path=str(image_dir),
-                size=(600, 800),  # 初始大小，会自动调整
-                custom_flags=[
-                    '--no-sandbox',
-                    '--disable-gpu',
-                    '--disable-dev-shm-usage',
-                    '--hide-scrollbars',
-                    '--force-device-scale-factor=2',  # 高清渲染
-                ]
-            )
-            
-            # 渲染图片
+
+            # 动态计算高度
+            estimated_height = self._estimate_content_height(page_content)
+            # 限制最大高度，避免生成超大图片
+            render_height = min(max(400, estimated_height), 3000)
+
+            image_filename = f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}_p{page_idx + 1}.png"
+
             try:
                 paths = hti.screenshot(
                     html_str=html_content,
                     save_as=image_filename,
-                    size=(600, 900)  # 宽度固定，高度足够
+                    size=(540, render_height)
                 )
-                
+
                 if not paths:
-                    logger.error("html2image 未返回图片路径")
-                    return False
-                
+                    logger.error("html2image 未返回图片路径 (页 %d)", page_idx + 1)
+                    continue
+
                 image_path = Path(paths[0])
-                if not image_path.exists():
-                    logger.error("生成的图片文件不存在: %s", image_path)
-                    return False
-                    
+                if image_path.exists():
+                    image_paths.append(image_path)
+                    logger.debug("生成图片页 %d: %s (高度: %d)", page_idx + 1, image_path, render_height)
+
             except Exception as render_err:
-                logger.error("html2image 渲染失败: %s", render_err)
+                logger.error("渲染第 %d 页失败: %s", page_idx + 1, render_err)
+                continue
+
+        if not image_paths:
+            return None
+
+        logger.info("总结图片生成完成，共 %d 页", len(image_paths))
+        return image_paths
+
+    async def _send_image_summary(self, event: AstrMessageEvent, summary_text: str, title: str = "群聊总结", time_range: str = ""):
+        """将总结内容渲染为图片并发送。
+
+        支持动态高度和分页，优先使用本地文件路径发送。
+
+        Args:
+            event: 消息事件
+            summary_text: 总结文本
+            title: 标题
+            time_range: 时间范围描述（可选）
+
+        Returns:
+            MessageResult 或 None，如果渲染失败返回 False 表示需要降级
+        """
+        try:
+            image_paths = await self._render_summary_images(summary_text, title, time_range)
+
+            if not image_paths:
                 return False
-            
-            # 读取图片并转为 base64
-            import base64
-            image_bytes = image_path.read_bytes()
-            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-            
-            logger.info("总结图片生成成功: %s (大小: %d bytes)", image_path, len(image_bytes))
-            
-            # 使用 Image 组件和 chain_result 发送 base64 图片
-            image_component = ImageComponent(file=f"base64://{image_base64}")
-            return event.chain_result([image_component])
-                
+
+            # 构建图片消息组件
+            components = []
+            for image_path in image_paths:
+                # 优先尝试使用本地文件路径（file:// 协议）
+                try:
+                    file_uri = image_path.absolute().as_uri()
+                    components.append(ImageComponent(file=file_uri))
+                except Exception:
+                    # 降级为 base64
+                    import base64
+                    image_bytes = image_path.read_bytes()
+                    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                    components.append(ImageComponent(file=f"base64://{image_base64}"))
+
+            logger.info("总结图片准备发送，共 %d 张", len(components))
+            return event.chain_result(components)
+
         except Exception as exc:
             logger.error("图片渲染失败: %s，将降级为合并转发", exc)
             import traceback
             logger.debug("详细错误: %s", traceback.format_exc())
-            return False  # 返回 False 表示需要降级
+            return False
 
     async def _send_summary(self, event: AstrMessageEvent, summary_text: str, outline_text: str = "", title: str = "群聊总结"):
         """发送总结内容，根据配置选择图片或文本模式。
@@ -928,6 +1088,85 @@ class ChatSummary(Star):
         
         # 文本模式或图片渲染失败降级：使用合并转发
         return await self._send_forward_summary(event, summary_text, outline_text)
+
+    async def _send_image_to_group(
+        self,
+        client,
+        group_id: str | int,
+        summary_text: str,
+        title: str = "群自动总结",
+        time_range: str = "",
+    ) -> bool:
+        """将总结渲染为图片并发送到指定群（供自动总结使用）。
+
+        Args:
+            client: aiocqhttp 客户端
+            group_id: 目标群号
+            summary_text: 总结文本
+            title: 标题
+            time_range: 时间范围描述
+
+        Returns:
+            是否成功发送
+        """
+        try:
+            image_paths = await self._render_summary_images(summary_text, title, time_range)
+
+            if not image_paths:
+                logger.warning("图片渲染失败，无法发送图片到群 %s", group_id)
+                return False
+
+            normalized_group_id = self._normalize_group_id(group_id)
+            success_count = 0
+
+            for image_path in image_paths:
+                try:
+                    # 构建 CQ 码消息
+                    # 优先使用文件路径
+                    message = [
+                        {
+                            "type": "image",
+                            "data": {"file": image_path.absolute().as_uri()}
+                        }
+                    ]
+
+                    await client.api.call_action(
+                        "send_group_msg",
+                        group_id=normalized_group_id,
+                        message=message,
+                    )
+                    success_count += 1
+
+                except Exception as send_err:
+                    logger.warning("发送图片到群 %s 失败: %s，尝试 base64 方式", group_id, send_err)
+                    # 降级为 base64
+                    try:
+                        import base64
+                        image_bytes = image_path.read_bytes()
+                        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                        message = [
+                            {
+                                "type": "image",
+                                "data": {"file": f"base64://{image_base64}"}
+                            }
+                        ]
+                        await client.api.call_action(
+                            "send_group_msg",
+                            group_id=normalized_group_id,
+                            message=message,
+                        )
+                        success_count += 1
+                    except Exception as base64_err:
+                        logger.error("base64 方式发送图片也失败: %s", base64_err)
+
+            if success_count > 0:
+                logger.info("成功发送 %d/%d 张图片到群 %s", success_count, len(image_paths), group_id)
+                return True
+            return False
+
+        except Exception as exc:
+            logger.error("发送图片到群 %s 失败: %s", group_id, exc)
+            return False
 
     # ------------------------------------------------------------------
     # LLM helpers
@@ -1453,14 +1692,31 @@ class ChatSummary(Star):
 
             if broadcast:
                 title = f"群自动总结 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                # 自动总结不发送 outline，避免消息过长
-                success = await self._send_group_forward(
-                    client, 
-                    group_id, 
-                    title, 
-                    summary_text,
-                    ""  # 自动总结不附带原始聊天要点，仅发送 AI 总结
-                )
+                render_as_image = settings.get("render_as_image", False)
+                success = False
+
+                # 如果启用图片渲染，优先发送图片
+                if render_as_image:
+                    logger.info("自动总结尝试以图片形式推送到群 %s", group_id)
+                    success = await self._send_image_to_group(
+                        client,
+                        group_id,
+                        summary_text,
+                        title,
+                    )
+                    if not success:
+                        logger.info("图片发送失败，降级为合并转发")
+
+                # 图片未启用或发送失败，使用合并转发
+                if not success:
+                    success = await self._send_group_forward(
+                        client,
+                        group_id,
+                        title,
+                        summary_text,
+                        ""  # 自动总结不附带原始聊天要点，仅发送 AI 总结
+                    )
+
                 if success:
                     logger.info("自动总结已成功推送到群 %s", group_id)
                 else:

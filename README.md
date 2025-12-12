@@ -53,14 +53,15 @@ apt-get update && apt-get install -y chromium chromium-driver
 - `prompt`：LLM 系统提示词，默认已提供结构化总结模板，可在 WebUI 编辑（默认要求简短回复且不使用 Markdown）。
 - `limits.max_chat_records`：拉取的最大聊天记录条数（默认 200）。
 - `limits.max_tokens`：LLM 输出上限，用于控制回复长度。
+- `render_as_image`：开启后总结内容渲染为图片发送（需要 html2image 库和 Chromium）。
 - `auto_summary`：
   - `enabled`：是否开启定时总结。
   - `interval_minutes`：轮询间隔（分钟）。
   - `target_groups`：要自动总结的群号列表。
-  - `min_member_level`：仅统计高于该等级的成员消息。
   - `summary_mode`：`message_count` 按消息数分段；`time_window` 按时间窗口分段。
   - `message_chunk_size` / `time_window_minutes`：对应分段参数。
-  - `broadcast`：开启后，自动总结也会以合并转发推送到群。
+  - `min_messages`：新消息少于此值时跳过总结。
+  - `broadcast`：开启后，自动总结也会推送到群（支持图片/合并转发）。
 
 自动总结结果会保存到插件目录的 `auto_summaries/` 下，文件名包含群号和时间，便于归档追溯。
 
