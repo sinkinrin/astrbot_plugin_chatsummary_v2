@@ -7,7 +7,7 @@
 - 私聊命令 `/群总结 [条数] [群号] [关注话题]`：在私聊中指定群号获取摘要（需在该群内）。
 - 转发总结 `/转发总结 [关注话题]`：对合并转发的聊天记录进行总结。
 - 提示词、最大记录数、Token 上限可在 AstrBot WebUI 配置。
-- 自动总结：支持定时任务、分群配置、按消息数/时间窗口分段、过滤最低群等级，并将结果写入 `auto_summaries/*.md` 归档。
+- 自动总结：支持定时任务、分群配置、按消息数/时间窗口分段、过滤最低群等级，并将结果写入 AstrBot 数据目录 `plugins_data/astrbot_plugin_chatsummary_v2/auto_summaries/*.md` 归档。
 
 ## 安装与部署
 1. 将本插件目录放入 AstrBot 的 `plugins/`，保持 `main.py`、`metadata.yaml`、`_conf_schema.json` 在根目录。
@@ -46,13 +46,14 @@ apt-get update && apt-get install -y chromium chromium-driver
 
 ### 其他特性
 - 如果发送合并转发的聊天记录，插件会自动展开转发节点参与总结。
-- 自动总结：在配置中开启 `auto_summary.enabled` 后，可选 `broadcast=true` 让定时总结也以合并转发发送到目标群；默认只写入 `auto_summaries/*.md`。
+- 自动总结：在配置中开启 `auto_summary.enabled` 后，可选 `broadcast=true` 让定时总结也推送到目标群；默认只写入数据目录 `plugins_data/astrbot_plugin_chatsummary_v2/auto_summaries/*.md`。
 - 条数需为整数，且受 `limits.max_chat_records` 约束，超过时会自动截断。
 
 ## 配置项
 - `prompt`：LLM 系统提示词，默认已提供结构化总结模板，可在 WebUI 编辑（默认要求简短回复且不使用 Markdown）。
 - `limits.max_chat_records`：拉取的最大聊天记录条数（默认 200）。
-- `limits.max_tokens`：LLM 输出上限，用于控制回复长度。
+- `limits.max_input_chars`：发送给 LLM 的上下文最大字符数，用于裁剪输入，避免超出模型上下文窗口。
+- `limits.max_tokens`：LLM 输出 token 上限，用于控制回复长度。
 - `render_as_image`：开启后总结内容渲染为图片发送（需要 html2image 库和 Chromium）。
 - `auto_summary`：
   - `enabled`：是否开启定时总结。
@@ -63,12 +64,12 @@ apt-get update && apt-get install -y chromium chromium-driver
   - `min_messages`：新消息少于此值时跳过总结。
   - `broadcast`：开启后，自动总结也会推送到群（支持图片/合并转发）。
 
-自动总结结果会保存到插件目录的 `auto_summaries/` 下，文件名包含群号和时间，便于归档追溯。
+自动总结结果会保存到 AstrBot 数据目录 `plugins_data/astrbot_plugin_chatsummary_v2/auto_summaries/` 下，文件名包含群号和时间，便于归档追溯。
 
 ## 说明
 - 插件仅支持 aiocqhttp 适配器。
 - 若提示未配置可用的模型，请检查 AstrBot Provider 设置。
-- 如需自定义格式，可直接修改提示词或调整 `limits/max_tokens` 以控制长度。
+- 如需自定义格式，可直接修改提示词或调整 `limits/max_input_chars`、`limits/max_tokens` 控制输入/输出长度。
 - 参考laopanmemz的消息总结插件，因为需求更多而完全重构，故新开v2版而不提交pr
 ## 参考
 - [AstrBot 官方文档](https://astrbot.app)

@@ -1,4 +1,5 @@
 __pycache__/
+auto_summaries/
 *.py[cod]
 *$py.class
 

@@ -27,6 +27,12 @@
         "default": 200,
         "hint": "建议 100~1500，过大可能导致接口变慢或超时"
       },
+      "max_input_chars": {
+        "description": "发送给 LLM 的上下文最大字符数",
+        "type": "int",
+        "default": 20000,
+        "hint": "用于裁剪聊天记录输入，避免超出模型上下文窗口；0 表示不裁剪（不推荐）"
+      },
       "max_tokens": {
         "description": "LLM 输出 token 上限",
         "type": "int",
