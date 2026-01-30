@@ -1228,29 +1228,24 @@ class ChatSummary(Star):
     # LLM helpers
     # ------------------------------------------------------------------
     def _build_topic_instruction(self, base_instruction: str, topic: str | None = None) -> str:
-        """根据用户指定的话题构建增强的指令。
-        
-        Args:
-            base_instruction: 基础指令文本
-            topic: 用户指定的关注话题（可选）
-        
-        Returns:
-            组合后的指令文本
-        """
+        """根据用户指定的话题构建增强的指令。"""
         if not topic or not topic.strip():
             return base_instruction
         
         topic = re.sub(r"\s+", " ", topic).strip()
         topic = topic.replace("[", "").replace("]", "")
         topic = topic[:120]
-        topic_instruction = (
-            f"【重点关注话题】{topic}\n"
-            "【硬性要求】回答必须优先覆盖该话题：先写“话题相关总结/结论”，再写“话题相关 TODO/待跟进”。"
-            "如果记录中没有与该话题相关的讨论，必须在开头明确写“未发现与该话题相关的讨论”，不要编造。"
-            "与话题无关的内容尽量压缩或放到最后（可选）。\n\n"
+        
+        # 赋予用户话题最高优先级，直接覆盖系统默认模板
+        return (
+            f"【最高优先级指令】\n"
+            f"请忽略所有预设的总结模版和格式要求，现在仅针对以下话题进行深入总结：\n"
+            f"目标话题：<{topic}>\n\n"
+            f"要求：\n"
+            f"1. 仅输出与该话题直接相关的内容（背景、过程、结论、后续行动）。\n"
+            f"2. 如果记录中没有与该话题相关的讨论，请直接回复：未发现关于“{topic}”的讨论。\n"
+            f"3. 严禁编造，严禁输出无关的分类标签。\n\n"
         )
-        return topic_instruction + base_instruction
-
     def _sanitize_text_for_llm(self, text: str) -> str:
         """Redact common sensitive patterns before sending content to LLM."""
         text = text or ""
@@ -1459,7 +1454,7 @@ class ChatSummary(Star):
             yield event.plain_result("未找到可供总结的群聊记录~")
             return
 
-        base_instruction = "请突出关键议题、明确结论和 TODO，并附上时间范围；回复保持简短优美，不要使用 Markdown。"
+        base_instruction = "请提炼关键结论、资源分享和 TODO，注明相关成员。严禁输出‘分类：XXX’等标签，通过自然段落和加粗标题组织，保持简练优美。"
         instruction = self._build_topic_instruction(base_instruction, topic)
         
         # 获取全局配置的 provider_id（用于手动总结命令）
@@ -1537,7 +1532,7 @@ class ChatSummary(Star):
             yield event.plain_result("未找到可供总结的群聊记录~")
             return
 
-        base_instruction = "请突出关键议题、结论、TODO，并注明对应的群成员；回复保持简短优美，不要使用 Markdown。"
+        base_instruction = "请直接提炼核心结论和待办事项。不要使用死板的分类标签，通过自然的段落汇报重点。"
         instruction = self._build_topic_instruction(base_instruction, topic)
         
         # 获取全局配置的 provider_id（用于手动总结命令）
