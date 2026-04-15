@@ -1452,6 +1452,7 @@ class ChatSummary(Star):
         )
         if not chat_text:
             yield event.plain_result("未找到可供总结的群聊记录~")
+            event.stop_event()
             return
 
         base_instruction = "请提炼关键结论、资源分享和 TODO，注明相关成员。严禁输出‘分类：XXX’等标签，通过自然段落和加粗标题组织，保持简练优美。"
@@ -1473,6 +1474,7 @@ class ChatSummary(Star):
         result = await self._send_summary(event, summary_text)
         if result:
             yield result
+        event.stop_event()
 
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE)
     @filter.command("群总结")
@@ -1530,6 +1532,7 @@ class ChatSummary(Star):
         )
         if not chat_text:
             yield event.plain_result("未找到可供总结的群聊记录~")
+            event.stop_event()
             return
 
         base_instruction = "请直接提炼核心结论和待办事项。不要使用死板的分类标签，通过自然的段落汇报重点。"
@@ -1551,6 +1554,7 @@ class ChatSummary(Star):
         result = await self._send_summary(event, summary_text)
         if result:
             yield result
+        event.stop_event()
 
     @filter.command("转发总结")
     async def forward_summary(self, event: AstrMessageEvent, topic: str | None = None):
@@ -1574,6 +1578,7 @@ class ChatSummary(Star):
                 "未发现转发记录，请将合并转发的聊天记录与指令一起发送。\n"
                 "可选：添加关注话题，如「/转发总结 技术讨论」"
             )
+            event.stop_event()
             return
 
         texts: List[str] = []
@@ -1584,6 +1589,7 @@ class ChatSummary(Star):
 
         if not texts:
             yield event.plain_result("未能读取转发内容，请确认转发消息可访问。")
+            event.stop_event()
             return
 
         chat_text = "\n".join(texts)
@@ -1609,6 +1615,7 @@ class ChatSummary(Star):
         result = await self._send_summary(event, summary_text)
         if result:
             yield result
+        event.stop_event()
 
     @filter.command("总结模型列表")
     async def list_providers(self, event: AstrMessageEvent):
@@ -1621,6 +1628,7 @@ class ChatSummary(Star):
             providers = self.context.get_all_providers()
             if not providers:
                 yield event.plain_result("当前没有可用的 LLM 提供商。")
+                event.stop_event()
                 return
             
             lines = ["📋 可用的 LLM 提供商列表：", ""]
@@ -1670,6 +1678,8 @@ class ChatSummary(Star):
         except Exception as exc:
             logger.error("获取 Provider 列表失败: %s", exc)
             yield event.plain_result(f"获取 Provider 列表失败：{exc}")
+        finally:
+            event.stop_event()
 
     # ------------------------------------------------------------------
     # Auto summary
