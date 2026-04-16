@@ -2,6 +2,8 @@ __pycache__/
 auto_summaries/
 *.py[cod]
 *$py.class
+.pytest_cache/
+tests/__pycache__/
 
 # virtualenv
 .venv/
@@ -16,3 +18,7 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test
+tests/test.sh
+data/
