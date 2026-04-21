@@ -2146,22 +2146,30 @@ class ChatSummary(Star):
         except Exception as exc:
             logger.error("发送提醒文本消息失败，user_id=%s, exc=%s", normalized_user_id, exc)
             return False
-    
+
+    def _get_important_reminder_cfg(self) -> dict[str, Any]:
+        reminder_cfg = self.settings.get("important_message_reminder") or {}
+        return reminder_cfg if isinstance(reminder_cfg, dict) else {}
 
     # ------------------------------------------------------------------
     # Important Message Reminder
     # ------------------------------------------------------------------
     def _is_related_to_me(self, event: AstrMessageEvent) -> tuple[bool, str | None]:
         """判断消息是否与提醒接收者直接相关。"""
-        reminder_cfg = self.settings.get("important_message_reminder", {})
-        mention_cfg = reminder_cfg.get("mention_me",{})
+        reminder_cfg = self._get_important_reminder_cfg()
+        mention_cfg = reminder_cfg.get("mention_me") or {}
+        if not isinstance(mention_cfg, dict):
+            mention_cfg = {}
         if not mention_cfg.get("enabled", False):
             return False, None
 
         target_user_id = str(reminder_cfg.get("target_user_id", "")).strip()
+        if not target_user_id:
+            return False, None
+
         aliases = [
             str(alias).strip()
-            for alias in (mention_cfg.get("aliases",[]))
+            for alias in (mention_cfg.get("aliases", []))
             if str(alias).strip()
         ]
 
@@ -2195,7 +2203,7 @@ class ChatSummary(Star):
         if not message_outline:
             return False, None
 
-        reminder_cfg = self.settings.get("important_message_reminder", {})
+        reminder_cfg = self._get_important_reminder_cfg()
         raw_rules = reminder_cfg.get("rules") or []
         rules = raw_rules if isinstance(raw_rules, list) else []
 
@@ -2232,10 +2240,13 @@ class ChatSummary(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=-1)
     async def handle_group_message_for_reminder(self, event: AstrMessageEvent):
         """监听群消息，调用_is_interested判断是否为感兴趣话题，命中则发送提醒"""
+        self._reload_settings()
+
         # 判断提醒功能是否开启
-        reminder_cfg = self.settings.get("important_message_reminder", {}) or {}
+        reminder_cfg = self._get_important_reminder_cfg()
         if not reminder_cfg.get("enabled", False):
             return
+
         # 白名单群聊
         watch_groups = reminder_cfg.get("watch_groups") or []
         group_id = event.get_group_id()
@@ -2243,7 +2254,9 @@ class ChatSummary(Star):
             return
 
         watch_group_set = {str(g).strip() for g in watch_groups if str(g).strip()}
-        if watch_group_set and str(group_id) not in watch_group_set:
+        if not watch_group_set:
+            return
+        if str(group_id) not in watch_group_set:
             return
 
         # 判断是否为关注内容
@@ -2251,11 +2264,13 @@ class ChatSummary(Star):
         if not matched:
             return
 
+        message_outline = event.get_message_outline() or ""
+
         logger.info(
             "[ImportantReminder] 群消息命中规则，group_id=%s, rule=%s, text=%s",
             group_id,
             matched_rule,
-            event.get_message_outline()[:200],
+            message_outline[:200],
         )
         
         # 准备提醒消息
