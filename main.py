@@ -151,7 +151,7 @@ _IMAGE_HTML_TEMPLATE = """
     "astrbot_plugin_chatsummary_v2",
     "sinkinrin",
     "基于 LLM 的群聊总结与定时归档插件，支持图片渲染和指定关注话题",
-    "1.3.2",
+    "1.4.0",
 )
 class ChatSummary(Star):
     CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
