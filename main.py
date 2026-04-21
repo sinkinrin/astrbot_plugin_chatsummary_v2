@@ -9,10 +9,12 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
+import re
 
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
-from astrbot.api.message_components import Image as ImageComponent  # 图片消息组件
+from astrbot.api.message_components import File, Image as ImageComponent, Node, Nodes, Plain, At, Reply
+from astrbot.api.event import MessageChain
 from astrbot.api import logger  # 使用 AstrBot 提供的 logger
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
@@ -2128,6 +2130,201 @@ class ChatSummary(Star):
             )
         except Exception:
             return {}
+
+    async def _send_plain_message_to_user(self, user_id: str | int, text: str) -> bool:
+        """使用 AstrBot 上下文向指定 QQ 私聊发送普通文本。"""
+        normalized_user_id = str(user_id).strip()
+        if not normalized_user_id or not text.strip():
+            return False
+
+        target_umo = f"QQ-NapCat:FriendMessage:{normalized_user_id}"
+        msg = MessageChain()
+        msg.chain = [Plain(text.strip())]
+        try:
+            await self.context.send_message(target_umo, msg)
+            return True
+        except Exception as exc:
+            logger.error("发送提醒文本消息失败，user_id=%s, exc=%s", normalized_user_id, exc)
+            return False
+
+    def _get_important_reminder_cfg(self) -> dict[str, Any]:
+        reminder_cfg = self.settings.get("important_message_reminder") or {}
+        return reminder_cfg if isinstance(reminder_cfg, dict) else {}
+
+    # ------------------------------------------------------------------
+    # Important Message Reminder
+    # ------------------------------------------------------------------
+    def _is_related_to_me(self, event: AstrMessageEvent) -> tuple[bool, str | None]:
+        """判断消息是否与提醒接收者直接相关。"""
+        reminder_cfg = self._get_important_reminder_cfg()
+        mention_cfg = reminder_cfg.get("mention_me") or {}
+        if not isinstance(mention_cfg, dict):
+            mention_cfg = {}
+        if not mention_cfg.get("enabled", False):
+            return False, None
+
+        target_user_id = str(reminder_cfg.get("target_user_id", "")).strip()
+        if not target_user_id:
+            return False, None
+
+        aliases = [
+            str(alias).strip()
+            for alias in (mention_cfg.get("aliases", []))
+            if str(alias).strip()
+        ]
+
+        for comp in event.get_messages() or []:
+            # @消息
+            if isinstance(comp, At):
+                at_target = str(getattr(comp, "qq", "")).strip()
+                if at_target == target_user_id:
+                    return True, "@我"
+                # @关注列表
+                # elif at_target in []:
+                #     return True, f"@{comp.get('name') or at_target}"
+            # 回复消息
+            if isinstance(comp, Reply) and str(getattr(comp, "sender_id") or "").strip() == target_user_id:
+                return True, "回复我的消息"
+        
+        # 匹配别名是否存在
+        message_outline = event.get_message_outline()
+        if not message_outline:
+            return False, None
+        
+        lowered_outline = message_outline.lower()
+        for alias in aliases:
+            if alias.lower() in lowered_outline:
+                return True, alias
+        return False, None
+
+    def _match_reminder_rules(self, event: AstrMessageEvent) -> tuple[bool, str | None]:
+        """按正则提醒规则匹配消息。"""
+        message_outline = (event.get_message_outline() or "").strip()
+        if not message_outline:
+            return False, None
+
+        reminder_cfg = self._get_important_reminder_cfg()
+        raw_rules = reminder_cfg.get("rules") or []
+        rules = raw_rules if isinstance(raw_rules, list) else []
+
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+
+            pattern_text = str(rule.get("pattern", "")).strip()
+            alias = str(rule.get("alias", "")).strip()
+            if not pattern_text:
+                continue
+
+            try:
+                pattern = re.compile(pattern_text, re.IGNORECASE)
+            except re.error as exc:
+                logger.warning("无效的提醒正则 '%s'，已跳过: %s", pattern_text, exc)
+                continue
+
+            if pattern.search(message_outline):
+                return True, alias or pattern_text
+
+        return False, None
+
+    def _is_interested(self, event: AstrMessageEvent) -> tuple[bool, str | None]:
+        """统一的感兴趣消息匹配规则出口，包含：
+        1. 是否直接被 @（_is_related_to_me）
+        2. 是否匹配正则规则（_match_reminder_rules）"""
+        related, related_label = self._is_related_to_me(event)
+        if related:
+            return True, related_label
+
+        return self._match_reminder_rules(event)
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=-1)
+    async def handle_group_message_for_reminder(self, event: AstrMessageEvent):
+        """监听群消息，调用_is_interested判断是否为感兴趣话题，命中则发送提醒"""
+        self._reload_settings()
+
+        # 判断提醒功能是否开启
+        reminder_cfg = self._get_important_reminder_cfg()
+        if not reminder_cfg.get("enabled", False):
+            return
+
+        # 白名单群聊
+        watch_groups = reminder_cfg.get("watch_groups") or []
+        group_id = event.get_group_id()
+        if not group_id:
+            return
+
+        watch_group_set = {str(g).strip() for g in watch_groups if str(g).strip()}
+        if not watch_group_set:
+            return
+        if str(group_id) not in watch_group_set:
+            return
+
+        # 判断是否为关注内容
+        matched, matched_rule = self._is_interested(event)
+        if not matched:
+            return
+
+        message_outline = event.get_message_outline() or ""
+
+        logger.info(
+            "[ImportantReminder] 群消息命中规则，group_id=%s, rule=%s, text=%s",
+            group_id,
+            matched_rule,
+            message_outline[:200],
+        )
+        
+        # 准备提醒消息
+        target_user_id = str(reminder_cfg.get("target_user_id", "") or "").strip()
+        if not target_user_id:
+            logger.debug("[ImportantReminder] 未配置 target_user_id，跳过发送提醒")
+            return
+
+        client = self._get_aiocqhttp_client()
+        if client is None:
+            logger.warning("[ImportantReminder] aiocqhttp client 未就绪，无法发送提醒")
+            return
+        # 获取群聊名称
+        group_info = await self._safe_group_info(client, group_id)
+        if isinstance(group_info, dict):
+            group_name = str(group_info.get("group_name", "") or "").strip()
+        else:
+            group_name = str(group_id)
+
+        sender_id = event.get_sender_id()
+        sender_name = event.get_sender_name() or sender_id or "未知发送者"
+
+        # 获取消息时间戳
+        try:
+            message_ts = event.message_obj.timestamp
+            display_time = datetime.fromtimestamp(float(message_ts)).strftime("%m-%d %H:%M")
+        except Exception:
+            display_time = datetime.now().strftime("%m-%d %H:%M")
+
+        plain_message = "\n".join([
+            f"群聊发现重要消息：{group_name}",
+            f"from：{sender_name}\t{display_time}",
+            f"规则：{matched_rule}",
+        ])
+        # 文本提醒放摘要信息；转发节点内容复用原消息组件
+        await self._send_plain_message_to_user(target_user_id, plain_message)
+
+        # 合并转发原消息
+        logger.debug(f"UIN: {sender_id}, Name: {sender_name}")
+        # FIXME(reminder-forward): 目前 Node 内容已能复用原始消息组件，
+        # 但私聊合并转发里显示的昵称仍可能是机器人昵称，尚未定位到底层渲染/平台兼容原因。
+        node = Node(
+            uin=sender_id,
+            name=sender_name,
+            content=event.get_messages(),
+        )
+        message = MessageChain()
+        message.chain = [node]
+        try:
+            target_umo = f"QQ-NapCat:FriendMessage:{target_user_id}"
+            await self.context.send_message(target_umo, message)
+        except Exception as exc:
+            logger.error("发送提醒合并转发失败，user_id=%s, exc=%s", target_user_id, exc)
+
 
     async def terminate(self):
         if self._auto_summary_task:

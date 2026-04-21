@@ -102,5 +102,80 @@
         "hint": "留空使用默认 LLM。填写你在 AstrBot「大语言模型」页面添加模型时设置的 ID（即配置项中的 id 字段值，如 'openai'、'gemini' 等）"
       }
     }
+  },
+  "important_message_reminder": {
+    "description": "重要消息提醒",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "开启重要消息提醒",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，插件会监听指定群聊中的新消息并按提醒规则进行初筛"
+      },
+      "watch_groups": {
+        "description": "监听群号",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "hint": "仅监听这些群的消息；支持多个群号，可用逗号或换行分隔"
+      },
+      "target_user_id": {
+        "description": "提醒接收用户 QQ 号",
+        "type": "string",
+        "default": "",
+        "hint": "命中提醒规则后，将提醒消息发送到该 QQ 对应的私聊会话；留空则不发送"
+      },
+      "rules": {
+        "description": "提醒规则列表",
+        "type": "template_list",
+        "hint": "每条规则包含一个正则表达式和一个可选别名；命中任一规则即触发提醒",
+        "templates": {
+          "regex_rule": {
+            "name": "正则提醒规则",
+            "hint": "填写 pattern 和 alias；alias 可留空",
+            "items": {
+              "pattern": {
+                "description": "正则表达式",
+                "type": "string",
+                "default": "",
+                "hint": "使用 Python 正则表达式；命中则触发提醒"
+              },
+              "alias": {
+                "description": "规则别名",
+                "type": "string",
+                "default": "",
+                "hint": "可留空；用于在提醒文本中显示更易读的名称"
+              }
+            }
+          }
+        },
+        "default": []
+      },
+      "mention_me": {
+        "description": "与我相关提醒",
+        "type": "object",
+        "hint": "单独处理 @我 或 文本中出现我的称呼，不与正则提醒规则混写",
+        "items": {
+          "enabled": {
+            "description": "开启与我相关提醒",
+            "type": "bool",
+            "default": false,
+            "hint": "开启后，@目标用户或命中下面的称呼列表时，也会触发提醒"
+          },
+          "aliases": {
+            "description": "我的称呼列表",
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "hint": "命中文本中的任一称呼即视为与我相关"
+          }
+        }
+      }
+    }
   }
 }
