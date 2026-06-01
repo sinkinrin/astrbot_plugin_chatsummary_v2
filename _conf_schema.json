@@ -65,6 +65,30 @@
         "default": [],
         "hint": "支持多个群号，可用逗号或换行分隔"
       },
+      "cache_enabled": {
+        "description": "使用本地消息缓存",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，目标群消息会实时缓存在 AstrBot 服务器本机，自动总结优先读取本地增量，避免周期性拉取大量 OneBot 历史"
+      },
+      "max_records": {
+        "description": "自动总结单轮最多处理消息数",
+        "type": "int",
+        "default": 500,
+        "hint": "限制每轮从本地缓存读取并送入总结流程的消息数量；不再代表向 OneBot 拉取的历史条数"
+      },
+      "history_backfill_count": {
+        "description": "历史补偿条数",
+        "type": "int",
+        "default": 100,
+        "hint": "仅当本地缓存没有待总结消息时，才向 OneBot 小批量补偿拉取最近消息；设为 0 可完全禁用自动总结的历史拉取"
+      },
+      "cache_retention_days": {
+        "description": "本地缓存保留天数",
+        "type": "int",
+        "default": 14,
+        "hint": "自动清理早于该天数的本地消息缓存，避免 AstrBot 服务器磁盘长期增长"
+      },
       "summary_mode": {
         "description": "总结分段方式",
         "type": "string",

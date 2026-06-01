@@ -2,14 +2,15 @@ import asyncio
 import contextlib
 import copy
 import hashlib
+import importlib.util
 import json
 import re
 import shutil
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
-import re
 
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
@@ -23,6 +24,16 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import (
     AiocqhttpAdapter,
 )
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+
+_cache_path = Path(__file__).with_name("message_cache.py")
+_cache_spec = importlib.util.spec_from_file_location("_chatsummary_message_cache", _cache_path)
+if _cache_spec is None or _cache_spec.loader is None:
+    raise ImportError(f"无法加载消息缓存模块: {_cache_path}")
+_cache_module = importlib.util.module_from_spec(_cache_spec)
+sys.modules[_cache_spec.name] = _cache_module
+_cache_spec.loader.exec_module(_cache_module)
+CachedMessage = _cache_module.CachedMessage
+MessageCache = _cache_module.MessageCache
 
 _TYPE_DEFAULTS = {
     "string": "",
@@ -151,12 +162,14 @@ _IMAGE_HTML_TEMPLATE = """
     "astrbot_plugin_chatsummary_v2",
     "sinkinrin",
     "基于 LLM 的群聊总结与定时归档插件，支持图片渲染和指定关注话题",
-    "1.4.0",
+    "1.5.0",
 )
 class ChatSummary(Star):
     CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
     CONFIG_FILE = f"{CONFIG_NAMESPACE}_config.json"
     STORAGE_SUBDIR = Path("plugins_data") / CONFIG_NAMESPACE / "auto_summaries"
+    CACHE_SUBDIR = Path("plugins_data") / CONFIG_NAMESPACE / "cache"
+    MESSAGE_CACHE_FILE = "messages.sqlite3"
 
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context, config)
@@ -177,6 +190,7 @@ class ChatSummary(Star):
         self._aiocqhttp_client = None
         self._summary_storage = self._resolve_summary_storage_path()
         self._summary_storage.mkdir(parents=True, exist_ok=True)
+        self._message_cache: MessageCache | None = None
         self._migrate_legacy_summary_storage()
         self._auto_summary_lock = asyncio.Lock()
         self._auto_summary_task: asyncio.Task | None = None
@@ -217,6 +231,16 @@ class ChatSummary(Star):
 
     def _resolve_summary_storage_path(self) -> Path:
         return Path(get_astrbot_data_path()) / self.STORAGE_SUBDIR
+
+    def _resolve_message_cache_path(self) -> Path:
+        return Path(get_astrbot_data_path()) / self.CACHE_SUBDIR / self.MESSAGE_CACHE_FILE
+
+    def _get_message_cache(self) -> MessageCache:
+        cache = getattr(self, "_message_cache", None)
+        if cache is None:
+            cache = MessageCache(self._resolve_message_cache_path())
+            self._message_cache = cache
+        return cache
 
     def _migrate_legacy_summary_storage(self) -> None:
         """Move legacy `auto_summaries/` under plugin dir into AstrBot data dir.
@@ -357,6 +381,7 @@ class ChatSummary(Star):
         group_id: str | int,
         *,
         count: int,
+        expand_forwards: bool = True,
     ) -> Tuple[str, List[dict]]:
         payloads = {
             "group_id": self._normalize_group_id(group_id),
@@ -379,7 +404,8 @@ class ChatSummary(Star):
 
             nickname = sender.get("card") or sender.get("nickname") or "未知用户"
             msg_time = datetime.fromtimestamp(msg.get("time", 0))
-            message_text = await self._flatten_message_parts(msg.get("message", []) or [], client)
+            flatten_client = client if expand_forwards else None
+            message_text = await self._flatten_message_parts(msg.get("message", []) or [], flatten_client)
 
             if not message_text:
                 continue
@@ -390,7 +416,14 @@ class ChatSummary(Star):
             chat_lines.append(line)
             structured.append(
                 {
+                    "message_id": str(
+                        msg.get("message_id")
+                        or msg.get("message_seq")
+                        or msg.get("seq")
+                        or ""
+                    ),
                     "time": msg_time,
+                    "timestamp": int(msg.get("time", 0) or 0),
                     "nickname": nickname,
                     "user_id": sender_id,
                     "text": message_text,
@@ -465,6 +498,289 @@ class ChatSummary(Star):
                 continue
             lines.append(f"[{msg_time}]「{nickname}」: {text}")
         return "\n".join(lines)
+
+    def _render_chat_text(self, messages: Sequence[dict]) -> str:
+        return "\n".join(
+            f"[{msg['time']}]「{msg['nickname']}」: {msg['text']}"
+            for msg in messages
+        )
+
+    def _build_cached_message_from_event(self, event: AstrMessageEvent) -> CachedMessage | None:
+        group_id = getattr(event, "get_group_id", lambda: None)()
+        if not group_id:
+            return None
+
+        text = (getattr(event, "get_message_outline", lambda: "")() or "").strip()
+        if not text:
+            return None
+        if any(text.startswith(prefix) for prefix in self.wake_prefix):
+            return None
+
+        sender_id = str(getattr(event, "get_sender_id", lambda: "")() or "")
+        sender_name = str(getattr(event, "get_sender_name", lambda: "")() or sender_id or "未知用户")
+        message_obj = getattr(event, "message_obj", None)
+
+        try:
+            timestamp = int(float(getattr(message_obj, "timestamp", 0) or 0))
+        except (TypeError, ValueError):
+            timestamp = 0
+        if timestamp <= 0:
+            timestamp = int(datetime.now().timestamp())
+
+        message_id = str(
+            getattr(message_obj, "message_id", "")
+            or getattr(message_obj, "message_seq", "")
+            or ""
+        ).strip()
+        if not message_id:
+            fingerprint = f"{group_id}:{sender_id}:{timestamp}:{text}"
+            message_id = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:32]
+
+        raw_type_summary = ""
+        try:
+            raw_type_summary = ",".join(type(part).__name__ for part in event.get_messages())
+        except Exception:
+            raw_type_summary = ""
+
+        return CachedMessage(
+            group_id=str(group_id),
+            message_id=message_id,
+            user_id=sender_id,
+            nickname=sender_name,
+            timestamp=timestamp,
+            text=text,
+            raw_type_summary=raw_type_summary,
+        )
+
+    def _is_self_message_event(self, event: AstrMessageEvent) -> bool:
+        sender_id = str(getattr(event, "get_sender_id", lambda: "")() or "").strip()
+        if not sender_id:
+            return False
+
+        message_obj = getattr(event, "message_obj", None)
+        candidates: List[str] = []
+        for source in (event, message_obj):
+            if source is None:
+                continue
+            for attr in ("self_id", "bot_id"):
+                value = getattr(source, attr, None)
+                if value is not None:
+                    candidates.append(str(value).strip())
+
+        return any(candidate and candidate == sender_id for candidate in candidates)
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=-2)
+    async def handle_group_message_for_summary_cache(self, event: AstrMessageEvent):
+        """Persist target-group messages locally so auto summary does not poll OneBot history."""
+        settings = self._reload_settings()
+        auto_cfg = settings.get("auto_summary", {}) or {}
+        if not auto_cfg.get("enabled"):
+            return
+        if auto_cfg.get("cache_enabled", True) is False:
+            return
+
+        group_id = getattr(event, "get_group_id", lambda: None)()
+        if not group_id:
+            return
+
+        target_groups = self._normalize_target_groups(auto_cfg.get("target_groups"))
+        target_group_set = {str(item) for item in target_groups}
+        if not target_group_set or str(group_id) not in target_group_set:
+            return
+
+        if self._is_self_message_event(event):
+            return
+
+        cached_message = self._build_cached_message_from_event(event)
+        if cached_message is None:
+            return
+
+        try:
+            inserted = self._get_message_cache().add_message(cached_message)
+        except Exception as exc:
+            logger.warning("写入自动总结消息缓存失败，group_id=%s: %s", group_id, exc)
+            return
+
+        if inserted:
+            logger.debug(
+                "自动总结消息已缓存，group_id=%s, message_id=%s",
+                cached_message.group_id,
+                cached_message.message_id,
+            )
+
+    async def _collect_auto_summary_messages(
+        self,
+        client,
+        group_id: str | int,
+        *,
+        max_records: int,
+        backfill_count: int,
+        cache_enabled: bool = True,
+    ) -> Tuple[str, List[dict]]:
+        safe_backfill_count = max(0, min(int(backfill_count), int(max_records)))
+        if not cache_enabled:
+            if safe_backfill_count <= 0:
+                logger.info("群 %s 自动总结本地缓存已关闭，且历史补偿为 0。", group_id)
+                return "", []
+            logger.info(
+                "群 %s 自动总结本地缓存已关闭，使用小批量历史补偿 count=%d",
+                group_id,
+                safe_backfill_count,
+            )
+            return await self._collect_group_messages(
+                client,
+                group_id,
+                count=safe_backfill_count,
+                expand_forwards=False,
+            )
+
+        message_cache = self._get_message_cache()
+        state = message_cache.get_summary_state(str(group_id))
+        after_ts = 0
+        after_message_id = ""
+        if state:
+            after_ts = self._as_int(state.get("last_summarized_ts"), 0)
+            after_message_id = str(state.get("last_summarized_message_id") or "")
+
+        cached_messages = message_cache.get_messages_after_cursor(
+            str(group_id),
+            after_timestamp=after_ts,
+            after_message_id=after_message_id,
+            limit=max_records,
+        )
+        if cached_messages:
+            logger.info(
+                "群 %s 从本地缓存读取 %d 条待总结消息（cursor=%s/%s）",
+                group_id,
+                len(cached_messages),
+                after_ts,
+                after_message_id or "-",
+            )
+            return self._render_chat_text(cached_messages), cached_messages
+
+        if safe_backfill_count <= 0:
+            logger.info("群 %s 本地缓存无待总结消息，且历史补偿已关闭。", group_id)
+            return "", []
+
+        logger.info(
+            "群 %s 本地缓存无待总结消息，执行小批量历史补偿 count=%d",
+            group_id,
+            safe_backfill_count,
+        )
+        return await self._collect_group_messages(
+            client,
+            group_id,
+            count=safe_backfill_count,
+            expand_forwards=False,
+        )
+
+    def _get_persistent_summary_state(self, group_id: str | int) -> dict | None:
+        try:
+            return self._get_message_cache().get_summary_state(str(group_id))
+        except Exception as exc:
+            logger.warning("读取自动总结状态失败，group_id=%s: %s", group_id, exc)
+            return None
+
+    def _filter_new_auto_summary_messages(
+        self,
+        structured: List[dict],
+        *,
+        last_summary_time: datetime | None,
+        last_summary_message_id: str = "",
+    ) -> List[dict]:
+        if not last_summary_time:
+            return structured
+
+        # 本地缓存读取已经通过 (timestamp, message_id) 游标过滤过；这里避免旧的
+        # timestamp-only 过滤把同一秒内的后续消息误删。
+        if last_summary_message_id and any(msg.get("message_id") for msg in structured):
+            last_ts = int(last_summary_time.timestamp())
+            return [
+                msg
+                for msg in structured
+                if self._message_after_cursor(
+                    msg,
+                    last_timestamp=last_ts,
+                    last_message_id=last_summary_message_id,
+                )
+            ]
+        if any(msg.get("message_id") for msg in structured):
+            last_ts = int(last_summary_time.timestamp())
+            return [
+                msg
+                for msg in structured
+                if self._as_int(msg.get("timestamp"), int(msg["time"].timestamp())) >= last_ts
+            ]
+
+        return [msg for msg in structured if msg["time"] > last_summary_time]
+
+    def _message_after_cursor(self, msg: dict, *, last_timestamp: int, last_message_id: str) -> bool:
+        msg_ts = self._as_int(msg.get("timestamp"), int(msg["time"].timestamp()))
+        if msg_ts > last_timestamp:
+            return True
+        if msg_ts < last_timestamp:
+            return False
+
+        msg_id = str(msg.get("message_id") or "")
+        if not msg_id:
+            return False
+
+        msg_num = self._message_id_num(msg_id)
+        last_num = self._message_id_num(last_message_id)
+        if msg_num is not None and last_num is not None:
+            return msg_num > last_num
+        if msg_num is not None and last_num is None:
+            return True
+        if msg_num is None and last_num is not None:
+            return False
+        return msg_id > str(last_message_id or "")
+
+    def _message_id_num(self, message_id: str) -> int | None:
+        text = str(message_id or "").strip()
+        if not text.isdigit():
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+
+    def _store_persistent_summary_state(
+        self,
+        group_id: str | int,
+        structured: Sequence[dict],
+        content_hash: str,
+    ) -> None:
+        if not structured:
+            return
+
+        last_message = structured[-1]
+        last_time = last_message.get("time")
+        if isinstance(last_time, datetime):
+            last_ts = int(last_time.timestamp())
+        else:
+            last_ts = self._as_int(last_message.get("timestamp"), 0)
+
+        last_message_id = str(last_message.get("message_id") or "")
+        try:
+            self._get_message_cache().set_summary_state(
+                group_id=str(group_id),
+                last_summarized_ts=last_ts,
+                last_summarized_message_id=last_message_id,
+                last_summary_hash=content_hash,
+            )
+        except Exception as exc:
+            logger.warning("写入自动总结状态失败，group_id=%s: %s", group_id, exc)
+
+    def _prune_message_cache(self, group_id: str | int, retention_days: int) -> None:
+        safe_days = max(1, int(retention_days))
+        before_ts = int(datetime.now().timestamp()) - safe_days * 24 * 60 * 60
+        try:
+            deleted = self._get_message_cache().prune_before(str(group_id), before_timestamp=before_ts)
+        except Exception as exc:
+            logger.warning("清理自动总结消息缓存失败，group_id=%s: %s", group_id, exc)
+            return
+        if deleted:
+            logger.info("已清理群 %s 的过期自动总结缓存 %d 条", group_id, deleted)
 
     def _normalize_group_id(self, group_id: str | int) -> int | str:
         try:
@@ -1401,6 +1717,10 @@ class ChatSummary(Star):
             return "LLM 调用失败，请检查模型配置后重试。"
         return response.completion_text
 
+    def _summary_failed(self, summary_text: str) -> bool:
+        text = (summary_text or "").strip()
+        return text.startswith("LLM 调用失败") or text.startswith("当前未配置可用的 LLM Provider")
+
     def _apply_char_budget(self, text: str, char_limit: int) -> str:
         text = text or ""
         if char_limit <= 0:
@@ -1750,7 +2070,11 @@ class ChatSummary(Star):
             logger.error("自动总结需要 aiocqhttp 适配器，但当前未发现可用实例。")
             return
 
-        max_records = max(1, self._as_int(settings.get("limits", {}).get("max_chat_records"), 200))
+        global_max_records = max(1, self._as_int(settings.get("limits", {}).get("max_chat_records"), 200))
+        max_records = max(1, self._as_int(auto_cfg.get("max_records"), min(global_max_records, 500)))
+        backfill_count = max(0, self._as_int(auto_cfg.get("history_backfill_count"), 100))
+        cache_retention_days = max(1, self._as_int(auto_cfg.get("cache_retention_days"), 14))
+        cache_enabled = auto_cfg.get("cache_enabled", True) is not False
         max_output_tokens = self._as_int(settings.get("limits", {}).get("max_tokens"), 2000)
         max_input_chars = self._as_int(settings.get("limits", {}).get("max_input_chars"), 20000)
         summary_mode = auto_cfg.get("summary_mode", "message_count")
@@ -1771,11 +2095,15 @@ class ChatSummary(Star):
         )
 
         for group_id in target_groups:
+            if cache_enabled:
+                self._prune_message_cache(group_id, cache_retention_days)
             try:
-                chat_text, structured = await self._collect_group_messages(
+                chat_text, structured = await self._collect_auto_summary_messages(
                     client,
                     group_id,
-                    count=max_records,
+                    max_records=max_records,
+                    backfill_count=backfill_count,
+                    cache_enabled=cache_enabled,
                 )
             except Exception as exc:
                 logger.error("拉取群 %s 聊天记录失败：%s", group_id, exc)
@@ -1787,11 +2115,26 @@ class ChatSummary(Star):
 
             # 检查是否有新消息（相比上次总结）
             last_msg_time = structured[-1]["time"] if structured else None
-            last_summary_time = self._last_summary_time.get(group_id)
+            persistent_state = self._get_persistent_summary_state(group_id) if cache_enabled else None
+            last_summary_times = getattr(self, "_last_summary_time", {})
+            last_summary_hashes = getattr(self, "_last_summary_hash", {})
+            last_summary_time = last_summary_times.get(group_id)
+            last_summary_hash = last_summary_hashes.get(group_id)
+            last_summary_message_id = ""
+            if persistent_state:
+                last_summary_ts = self._as_int(persistent_state.get("last_summarized_ts"), 0)
+                if last_summary_ts > 0:
+                    last_summary_time = datetime.fromtimestamp(last_summary_ts)
+                last_summary_message_id = str(persistent_state.get("last_summarized_message_id") or "")
+                last_summary_hash = str(persistent_state.get("last_summary_hash") or "")
             
             if last_summary_time and last_msg_time:
                 # 过滤掉上次总结之前的消息，只保留新消息
-                new_messages = [msg for msg in structured if msg["time"] > last_summary_time]
+                new_messages = self._filter_new_auto_summary_messages(
+                    structured,
+                    last_summary_time=last_summary_time,
+                    last_summary_message_id=last_summary_message_id,
+                )
                 if not new_messages:
                     logger.info(
                         "群 %s 自上次总结(%s)以来无新消息，跳过本轮总结。",
@@ -1816,16 +2159,11 @@ class ChatSummary(Star):
                     len(new_messages),
                     last_summary_time.strftime("%Y-%m-%d %H:%M:%S"),
                 )
-                # 使用新消息进行总结，但保留一些上下文
-                # 如果新消息太少，使用全部消息以提供上下文
-                if len(new_messages) < 10 and len(structured) > len(new_messages):
-                    logger.debug("新消息较少，使用全部 %d 条消息以提供上下文", len(structured))
-                else:
-                    structured = new_messages
-                    chat_text = "\n".join(
-                        f"[{msg['time']}]「{msg['nickname']}」: {msg['text']}"
-                        for msg in structured
-                    )
+                structured = new_messages
+                chat_text = "\n".join(
+                    f"[{msg['time']}]「{msg['nickname']}」: {msg['text']}"
+                    for msg in structured
+                )
             else:
                 # 首次运行，检查消息数量是否达到最小阈值
                 if len(structured) < min_messages:
@@ -1839,7 +2177,7 @@ class ChatSummary(Star):
             
             # 计算内容哈希，避免重复总结相同内容
             content_hash = self._compute_content_hash(structured)
-            if content_hash == self._last_summary_hash.get(group_id):
+            if content_hash == last_summary_hash:
                 logger.info("群 %s 消息内容与上次相同，跳过重复总结。", group_id)
                 continue
 
@@ -1854,6 +2192,9 @@ class ChatSummary(Star):
                 max_tokens=max_output_tokens,
                 provider_id=configured_provider_id if configured_provider_id.strip() else None,
             )
+            if self._summary_failed(summary_text):
+                logger.error("群 %s 自动总结失败，跳过归档和游标更新: %s", group_id, summary_text)
+                continue
             logger.info(
                 "群 %s 总结完成，记录数=%s，模式=%s，写入中...",
                 group_id,
@@ -1873,8 +2214,14 @@ class ChatSummary(Star):
 
             # 更新上次总结时间和内容哈希
             if structured:
+                if not hasattr(self, "_last_summary_time"):
+                    self._last_summary_time = {}
+                if not hasattr(self, "_last_summary_hash"):
+                    self._last_summary_hash = {}
                 self._last_summary_time[group_id] = structured[-1]["time"]
                 self._last_summary_hash[group_id] = content_hash
+                if cache_enabled:
+                    self._store_persistent_summary_state(group_id, structured, content_hash)
                 logger.debug("更新群 %s 的上次总结时间为: %s", group_id, self._last_summary_time[group_id])
 
             if broadcast:

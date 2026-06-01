@@ -2,7 +2,26 @@
 
 基于 LLM 的 AstrBot 群聊总结插件，支持手动总结、自动定时归档、合并转发总结、图片渲染输出，以及基于规则的“重要消息提醒”。
 
-当前版本：`v1.4.0`
+当前版本：`1.5.0`
+
+## 版本更新
+
+### 1.5.0
+
+- 自动总结改为事件驱动本地缓存架构：NapCat 群消息事件由 AstrBot 插件实时写入本地 SQLite，定时总结优先读取未总结增量。
+- `get_group_msg_history` 不再作为自动总结主数据源，仅在本地缓存没有待总结消息时按 `auto_summary.history_backfill_count` 小批量补偿。
+- 自动总结历史补偿不会展开合并转发，避免额外触发 `get_forward_msg` 重型请求。
+- 新增 `auto_summary.cache_enabled`、`auto_summary.max_records`、`auto_summary.history_backfill_count`、`auto_summary.cache_retention_days` 配置。
+- 自动总结状态持久化到本地缓存，按 `timestamp + message_id` 游标推进，降低重启后重复总结和漏消息风险。
+- LLM 调用失败时不再归档，也不会推进总结游标。
+- 过滤机器人自己发送的群消息，避免自动总结内容被再次缓存进下一轮。
+
+### 1.4.0
+
+- 新增重要消息提醒功能，可监听指定群聊并按正则规则或“与我相关”条件触发私聊提醒。
+- 支持 `@目标用户`、回复目标用户消息、称呼别名匹配。
+- 命中提醒后发送摘要文本，并尝试以合并转发形式附带原消息。
+- 新增提醒相关配置项：`important_message_reminder.enabled`、`watch_groups`、`target_user_id`、`rules`、`mention_me`。
 
 ## 功能概览
 
@@ -10,7 +29,7 @@
 - 私聊指定群总结：`/群总结 [条数] [群号] [关注话题]`
 - 合并转发总结：`/转发总结 [关注话题]`
 - 模型列表查看：`/总结模型列表`
-- 自动总结：定时拉取群消息，按消息数或时间窗口分段，总结后写入 Markdown 归档，可选推送回群
+- 自动总结：监听目标群消息并写入本地缓存，定时总结未处理增量，结果写入 Markdown 归档，可选推送回群
 - 图片渲染：可将总结内容渲染为图片发送
 - 重要消息提醒：监听指定群的消息，命中正则规则或“与我相关”条件时向指定 QQ 私聊提醒
 
@@ -154,6 +173,10 @@ plugins_data/astrbot_plugin_chatsummary_v2/auto_summaries/
 - `auto_summary.enabled`：是否开启自动总结
 - `auto_summary.interval_minutes`：轮询间隔（分钟）
 - `auto_summary.target_groups`：需要自动总结的群号列表
+- `auto_summary.cache_enabled`：是否使用本地消息缓存。开启后，插件会监听目标群消息并缓存在 AstrBot 服务器本机，自动总结优先读取本地增量。
+- `auto_summary.max_records`：自动总结单轮最多处理的本地缓存消息数，不再表示向 OneBot 拉取历史的条数。
+- `auto_summary.history_backfill_count`：历史补偿条数。仅当本地缓存没有待总结消息时，才向 OneBot 小批量拉取最近消息；设为 `0` 可禁用自动总结历史拉取。
+- `auto_summary.cache_retention_days`：本地消息缓存保留天数，避免 AstrBot 服务器磁盘长期增长。
 - `auto_summary.summary_mode`：
   - `message_count`：按消息条数分段
   - `time_window`：按时间窗口分段
@@ -208,13 +231,29 @@ plugins_data/astrbot_plugin_chatsummary_v2/auto_summaries/
 
 ### 限制项
 
-- `limits.max_chat_records`：单次拉取的最大聊天记录数
+- `limits.max_chat_records`：手动总结命令单次拉取的最大聊天记录数；自动总结优先使用本地缓存，见 `auto_summary.max_records`
 - `limits.max_input_chars`：发给 LLM 的最大上下文字符数
 - `limits.max_tokens`：LLM 输出 token 上限
 
 ### 自动总结配置
 
 见上文“自动总结”章节。
+
+### 自动总结数据流
+
+自动总结采用事件驱动缓存：
+
+```text
+NapCat 群消息事件 -> AstrBot 插件监听 -> 本地 SQLite 缓存 -> 定时总结读取未总结增量
+```
+
+`get_group_msg_history` 不再作为自动总结主数据源，仅在本地缓存没有待总结消息时按 `auto_summary.history_backfill_count` 做小批量补偿。合并转发在自动总结历史补偿中不会展开，避免对远端 OneBot 产生额外重型查询。
+
+本地缓存位于 AstrBot 服务器的数据目录：
+
+```text
+plugins_data/astrbot_plugin_chatsummary_v2/cache/messages.sqlite3
+```
 
 ### 重要消息提醒配置
 
