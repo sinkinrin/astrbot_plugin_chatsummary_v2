@@ -6,6 +6,8 @@
 
 ## 版本更新
 
+完整更新日志见 [CHANGELOG.md](CHANGELOG.md)。
+
 ### 1.5.0
 
 - 自动总结改为事件驱动本地缓存架构：NapCat 群消息事件由 AstrBot 插件实时写入本地 SQLite，定时总结优先读取未总结增量。
