@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.0
+
+### Added
+
+- Added `privacy.redact_sensitive_info` to control whether chat text is redacted before being sent to the LLM.
+- Added `summary_include_time` to control whether summary points should include message times.
+- Added regression tests for privacy redaction and summary time instructions.
+
 ## 1.5.0
 
 ### Added

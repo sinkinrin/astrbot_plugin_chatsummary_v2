@@ -2,28 +2,9 @@
 
 基于 LLM 的 AstrBot 群聊总结插件，支持手动总结、自动定时归档、合并转发总结、图片渲染输出，以及基于规则的“重要消息提醒”。
 
-当前版本：`1.5.0`
-
-## 版本更新
+当前版本：`1.6.0`
 
 完整更新日志见 [CHANGELOG.md](CHANGELOG.md)。
-
-### 1.5.0
-
-- 自动总结改为事件驱动本地缓存架构：NapCat 群消息事件由 AstrBot 插件实时写入本地 SQLite，定时总结优先读取未总结增量。
-- `get_group_msg_history` 不再作为自动总结主数据源，仅在本地缓存没有待总结消息时按 `auto_summary.history_backfill_count` 小批量补偿。
-- 自动总结历史补偿不会展开合并转发，避免额外触发 `get_forward_msg` 重型请求。
-- 新增 `auto_summary.cache_enabled`、`auto_summary.max_records`、`auto_summary.history_backfill_count`、`auto_summary.cache_retention_days` 配置。
-- 自动总结状态持久化到本地缓存，按 `timestamp + message_id` 游标推进，降低重启后重复总结和漏消息风险。
-- LLM 调用失败时不再归档，也不会推进总结游标。
-- 过滤机器人自己发送的群消息，避免自动总结内容被再次缓存进下一轮。
-
-### 1.4.0
-
-- 新增重要消息提醒功能，可监听指定群聊并按正则规则或“与我相关”条件触发私聊提醒。
-- 支持 `@目标用户`、回复目标用户消息、称呼别名匹配。
-- 命中提醒后发送摘要文本，并尝试以合并转发形式附带原消息。
-- 新增提醒相关配置项：`important_message_reminder.enabled`、`watch_groups`、`target_user_id`、`rules`、`mention_me`。
 
 ## 功能概览
 
@@ -230,6 +211,11 @@ plugins_data/astrbot_plugin_chatsummary_v2/auto_summaries/
 - `prompt`：LLM 系统提示词，支持 `\n` 分行
 - `render_as_image`：是否把总结渲染成图片发送
 - `provider_id`：手动总结命令使用的全局 Provider ID
+- `summary_include_time`：总结要点是否包含对应时间，默认开启。开启后会要求 LLM 为每条总结要点标注消息时间或时间范围。
+
+### 隐私配置
+
+- `privacy.redact_sensitive_info`：发送给 LLM 前是否脱敏敏感信息，默认开启。开启后会将 URL、邮箱、手机号、常见密钥和 Bearer Token 替换为占位符；关闭后原文发送给 LLM。
 
 ### 限制项
 

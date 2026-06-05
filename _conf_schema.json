@@ -17,6 +17,24 @@
     "default": "",
     "hint": "留空使用默认 LLM。填写你在 AstrBot「大语言模型」页面添加模型时设置的 ID。用于手动触发的「消息总结」「群总结」「转发总结」命令"
   },
+  "summary_include_time": {
+    "description": "总结要点包含时间",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后会要求 LLM 为每条总结要点标注消息时间或时间范围；关闭后不额外要求时间标注"
+  },
+  "privacy": {
+    "description": "隐私与脱敏设置",
+    "type": "object",
+    "items": {
+      "redact_sensitive_info": {
+        "description": "发送给 LLM 前脱敏敏感信息",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后会将 URL、邮箱、手机号、常见密钥和 Bearer Token 替换为占位符；关闭后原文发送给 LLM"
+      }
+    }
+  },
   "limits": {
     "description": "限制：控制一次拉取的记录数量和模型输出长度",
     "type": "object",

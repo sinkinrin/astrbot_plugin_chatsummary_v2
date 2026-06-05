@@ -162,7 +162,7 @@ _IMAGE_HTML_TEMPLATE = """
     "astrbot_plugin_chatsummary_v2",
     "sinkinrin",
     "基于 LLM 的群聊总结与定时归档插件，支持图片渲染和指定关注话题",
-    "1.5.0",
+    "1.6.0",
 )
 class ChatSummary(Star):
     CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
@@ -1564,6 +1564,23 @@ class ChatSummary(Star):
             f"2. 如果记录中没有与该话题相关的讨论，请直接回复：未发现关于“{topic}”的讨论。\n"
             f"3. 严禁编造，严禁输出无关的分类标签。\n\n"
         )
+
+    def _summary_include_time_enabled(self, settings: dict | None = None) -> bool:
+        active_settings = settings if settings is not None else self.settings
+        value = active_settings.get("summary_include_time", True)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+    def _with_summary_time_instruction(self, instruction: str, settings: dict | None = None) -> str:
+        if not self._summary_include_time_enabled(settings):
+            return instruction
+        time_instruction = (
+            "请为每条总结要点标注对应时间；单条来源使用消息时间，多条来源使用时间范围；"
+            "只能使用聊天记录中出现的时间，无法确定时写“时间不明”，不要编造。"
+        )
+        return f"{instruction.rstrip()}\n{time_instruction}"
+
     def _sanitize_text_for_llm(self, text: str) -> str:
         """Redact common sensitive patterns before sending content to LLM."""
         text = text or ""
@@ -1647,12 +1664,19 @@ class ChatSummary(Star):
         return combined if max_chars <= 0 else combined[:max_chars]
 
     def _prepare_chat_text_for_llm(self, chat_text: str, *, topic: str | None, max_chars: int) -> str:
-        text = self._sanitize_text_for_llm(chat_text)
+        text = self._sanitize_text_for_llm(chat_text) if self._redact_sensitive_info_enabled() else (chat_text or "")
         if max_chars <= 0 or len(text) <= max_chars:
             return text
         if topic and topic.strip():
             return self._truncate_with_topic_focus(text, topic, max_chars)
         return self._apply_char_budget(text, max_chars)
+
+    def _redact_sensitive_info_enabled(self) -> bool:
+        privacy_cfg = self.settings.get("privacy") or {}
+        value = privacy_cfg.get("redact_sensitive_info", True)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
     async def _summarize_text(
         self,
@@ -1778,7 +1802,7 @@ class ChatSummary(Star):
             return
 
         base_instruction = "请提炼关键结论、资源分享和 TODO，注明相关成员。严禁输出‘分类：XXX’等标签，通过自然段落和加粗标题组织，保持简练优美。"
-        instruction = self._build_topic_instruction(base_instruction, topic)
+        instruction = self._with_summary_time_instruction(self._build_topic_instruction(base_instruction, topic))
         
         # 获取全局配置的 provider_id（用于手动总结命令）
         global_provider_id = self.settings.get("provider_id", "") or ""
@@ -1858,7 +1882,7 @@ class ChatSummary(Star):
             return
 
         base_instruction = "请直接提炼核心结论和待办事项。不要使用死板的分类标签，通过自然的段落汇报重点。"
-        instruction = self._build_topic_instruction(base_instruction, topic)
+        instruction = self._with_summary_time_instruction(self._build_topic_instruction(base_instruction, topic))
         
         # 获取全局配置的 provider_id（用于手动总结命令）
         global_provider_id = self.settings.get("provider_id", "") or ""
@@ -1919,7 +1943,7 @@ class ChatSummary(Star):
             "请根据转发的聊天记录进行总结，突出结论、TODO、时间范围和相关参与者；"
             "回复保持简短优美，不要使用 Markdown。"
         )
-        instruction = self._build_topic_instruction(base_instruction, topic)
+        instruction = self._with_summary_time_instruction(self._build_topic_instruction(base_instruction, topic))
         
         # 获取全局配置的 provider_id（用于手动总结命令）
         global_provider_id = self.settings.get("provider_id", "") or ""
@@ -2093,6 +2117,7 @@ class ChatSummary(Star):
             "每个分段输出关键议题、重要发言人、时间范围以及需要跟进的事项。"
             "最后给出全局重点和 TODO，整体内容要突出重点，保持简短优美，不要使用 Markdown。"
         )
+        instruction = self._with_summary_time_instruction(instruction, settings)
 
         for group_id in target_groups:
             if cache_enabled:
