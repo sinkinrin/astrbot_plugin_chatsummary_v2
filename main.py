@@ -45,6 +45,25 @@ _TYPE_DEFAULTS = {
     "object": {},
 }
 
+# 噪声占位符正则：同时覆盖两条来源路径的占位符及其带 ID 变体
+#   - OneBot 路径 (_flatten_message_parts): [图片] [表情] [语音] [视频] [回复消息] [合并转发]
+#   - 缓存路径 (get_message_outline):       [图片] [表情:123] [At:123] [转发消息] [引用消息(...)] [record] [video]
+# 一条消息剥离所有噪声 token 后若无剩余实质内容，则视为无效消息。
+_NOISE_TOKEN_PATTERN = re.compile(
+    r"""\[
+        (?:
+            图片
+          | 表情 (?::[^\]]*)?
+          | 语音 | record
+          | 视频 | video
+          | 回复消息 | 引用消息 (?:\([^)]*\))?
+          | 合并转发 | 转发消息
+          | At: [^\]]*
+        )
+    \]""",
+    re.VERBOSE,
+)
+
 # 图片渲染 HTML 模板
 _IMAGE_HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -162,7 +181,7 @@ _IMAGE_HTML_TEMPLATE = """
     "astrbot_plugin_chatsummary_v2",
     "sinkinrin",
     "基于 LLM 的群聊总结与定时归档插件，支持图片渲染和指定关注话题",
-    "1.6.0",
+    "1.7.0",
 )
 class ChatSummary(Star):
     CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
@@ -383,20 +402,26 @@ class ChatSummary(Star):
         count: int,
         expand_forwards: bool = True,
     ) -> Tuple[str, List[dict]]:
+        login_info = await client.api.call_action("get_login_info")
+        my_id = str(login_info.get("user_id", ""))
+
+        # 超量拉取：群里图片/表情消息可能占大头，多拉 50% 保证过滤后仍能凑满 count 条
+        fetch_count = min(max(1, count) * 3 // 2, 3000)
         payloads = {
             "group_id": self._normalize_group_id(group_id),
             "message_seq": 0,
-            "count": max(1, count),
-            # 注意：部分 CQHTTP 实现不支持此参数，消息顺序取决于实现
+            "count": fetch_count,
         }
         history = await client.api.call_action("get_group_msg_history", **payloads)
-        login_info = await client.api.call_action("get_login_info")
-        my_id = str(login_info.get("user_id", ""))
         messages = history.get("messages", []) or []
+        logger.info("群 %s 历史拉取：请求 %d 条，实际返回 %d 条", group_id, fetch_count, len(messages))
 
         chat_lines: List[str] = []
         structured: List[dict] = []
         for msg in messages:
+            if len(structured) >= count:
+                break
+
             sender = msg.get("sender", {}) or {}
             sender_id = str(sender.get("user_id", ""))
             if sender_id == my_id:
@@ -410,6 +435,9 @@ class ChatSummary(Star):
             if not message_text:
                 continue
             if any(message_text.startswith(prefix) for prefix in self.wake_prefix):
+                continue
+            # 跳过纯图片/表情/语音等无实质内容的消息
+            if not self._is_meaningful_text(message_text):
                 continue
 
             line = f"[{msg_time}]「{nickname}」: {message_text}"
@@ -431,6 +459,35 @@ class ChatSummary(Star):
             )
 
         return "\n".join(chat_lines), structured
+
+    async def _collect_messages_for_manual_summary(
+        self,
+        client,
+        group_id: str | int,
+        *,
+        count: int,
+    ) -> Tuple[str, List[dict]]:
+        """手动总结命令专用：优先读本地 SQLite 缓存，缓存不足时补充 OneBot 拉取。"""
+        message_cache = self._get_message_cache()
+        cached = message_cache.get_recent_messages(str(group_id), limit=count)
+
+        # 缓存命中且条数足够，直接用
+        if len(cached) >= count:
+            logger.info("群 %s 手动总结从本地缓存读取 %d 条", group_id, len(cached))
+            # 本地缓存写入时已经过 get_message_outline 处理，同样过滤噪声
+            meaningful = [m for m in cached if self._is_meaningful_text(m["text"])]
+            return self._render_chat_text(meaningful), meaningful
+
+        # 缓存有部分数据但不够，或完全没有——走 OneBot 拉取
+        if cached:
+            logger.info(
+                "群 %s 本地缓存仅有 %d 条（需 %d 条），回退到 OneBot 拉取",
+                group_id, len(cached), count,
+            )
+        else:
+            logger.info("群 %s 本地缓存为空，使用 OneBot 拉取", group_id)
+
+        return await self._collect_group_messages(client, group_id, count=count)
 
     async def _flatten_message_parts(self, parts: Sequence[dict], client=None) -> str:
         buffers: List[str] = []
@@ -498,6 +555,13 @@ class ChatSummary(Star):
                 continue
             lines.append(f"[{msg_time}]「{nickname}」: {text}")
         return "\n".join(lines)
+
+    def _is_meaningful_text(self, text: str) -> bool:
+        """消息 text 是否含有实质内容（剥离所有噪声占位符后仍有剩余）。"""
+        if not text or not text.strip():
+            return False
+        stripped = _NOISE_TOKEN_PATTERN.sub("", text)
+        return bool(stripped.strip())
 
     def _render_chat_text(self, messages: Sequence[dict]) -> str:
         return "\n".join(
@@ -1791,7 +1855,7 @@ class ChatSummary(Star):
             yield event.plain_result(f"单次最多支持 {limit} 条记录，已自动按上限 {limit} 条处理~")
 
         ai_event = self._ensure_aiocqhttp_event(event)
-        chat_text, _ = await self._collect_group_messages(
+        chat_text, _ = await self._collect_messages_for_manual_summary(
             ai_event.bot,
             event.get_group_id(),
             count=count_value,
@@ -1871,7 +1935,7 @@ class ChatSummary(Star):
             event.stop_event()
             return
 
-        chat_text, _ = await self._collect_group_messages(
+        chat_text, _ = await self._collect_messages_for_manual_summary(
             client,
             group_id,
             count=count_value,

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.7.0
+
+### Added
+
+- Manual summary commands (`/消息总结`, `/群总结`) now read the local SQLite cache first and fall back to OneBot history only when the cache is insufficient.
+- Added `_NOISE_TOKEN_PATTERN` to drop noise-only messages (pure image / face / voice / video / reply / forward placeholders) before summarizing, covering both the OneBot and cache outline placeholder formats.
+- Added a history-fetch log recording requested vs. actually returned message counts.
+
+### Changed
+
+- Manual summary now over-fetches history (1.5x, capped at 3000) so the target message count can still be met after noise filtering.
+
 ## 1.6.0
 
 ### Added
