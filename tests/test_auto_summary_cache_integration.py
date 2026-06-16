@@ -140,6 +140,39 @@ def test_group_message_handler_ignores_self_messages():
     assert plugin._message_cache.messages == []
 
 
+def test_group_message_handler_caches_when_auto_summary_disabled_but_cache_enabled():
+    """解耦：关闭自动总结(enabled=False)但开启缓存时，目标群消息仍应写入 SQLite。"""
+    plugin = build_plugin(
+        {
+            "enabled": False,
+            "target_groups": ["868381808"],
+            "cache_enabled": True,
+        }
+    )
+    event = DummyGroupEvent()
+
+    asyncio.run(plugin.handle_group_message_for_summary_cache(event))
+
+    assert len(plugin._message_cache.messages) == 1
+    assert plugin._message_cache.messages[0].text == "hello from target group"
+
+
+def test_group_message_handler_does_not_cache_when_cache_disabled():
+    """cache_enabled=False 时不写缓存，即使自动总结开启。"""
+    plugin = build_plugin(
+        {
+            "enabled": True,
+            "target_groups": ["868381808"],
+            "cache_enabled": False,
+        }
+    )
+    event = DummyGroupEvent()
+
+    asyncio.run(plugin.handle_group_message_for_summary_cache(event))
+
+    assert plugin._message_cache.messages == []
+
+
 def test_collect_auto_summary_messages_reads_local_cache_before_history_api():
     plugin = build_plugin()
     plugin._message_cache.state["868381808"] = {

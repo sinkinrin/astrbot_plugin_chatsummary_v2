@@ -181,7 +181,7 @@ _IMAGE_HTML_TEMPLATE = """
     "astrbot_plugin_chatsummary_v2",
     "sinkinrin",
     "基于 LLM 的群聊总结与定时归档插件，支持图片渲染和指定关注话题",
-    "1.7.0",
+    "1.7.1",
 )
 class ChatSummary(Star):
     CONFIG_NAMESPACE = "astrbot_plugin_chatsummary_v2"
@@ -469,20 +469,26 @@ class ChatSummary(Star):
     ) -> Tuple[str, List[dict]]:
         """手动总结命令专用：优先读本地 SQLite 缓存，缓存不足时补充 OneBot 拉取。"""
         message_cache = self._get_message_cache()
-        cached = message_cache.get_recent_messages(str(group_id), limit=count)
+        # 超量读取：缓存里图片/表情等噪声消息会被过滤掉，多读 50%（上限 3000）保证
+        # 过滤后仍能凑满 count 条，与 OneBot 拉取路径的超量策略保持一致。
+        fetch_limit = min(max(1, count) * 3 // 2, 3000)
+        cached = message_cache.get_recent_messages(str(group_id), limit=fetch_limit)
+        meaningful = [m for m in cached if self._is_meaningful_text(m["text"])]
 
-        # 缓存命中且条数足够，直接用
-        if len(cached) >= count:
-            logger.info("群 %s 手动总结从本地缓存读取 %d 条", group_id, len(cached))
-            # 本地缓存写入时已经过 get_message_outline 处理，同样过滤噪声
-            meaningful = [m for m in cached if self._is_meaningful_text(m["text"])]
+        # 过滤后仍满足条数，取最近 count 条直接用
+        if len(meaningful) >= count:
+            meaningful = meaningful[-count:]
+            logger.info(
+                "群 %s 手动总结从本地缓存读取 %d 条（拉取 %d 条，过滤后 %d 条）",
+                group_id, len(meaningful), len(cached), len(meaningful),
+            )
             return self._render_chat_text(meaningful), meaningful
 
         # 缓存有部分数据但不够，或完全没有——走 OneBot 拉取
         if cached:
             logger.info(
-                "群 %s 本地缓存仅有 %d 条（需 %d 条），回退到 OneBot 拉取",
-                group_id, len(cached), count,
+                "群 %s 本地缓存过滤后仅 %d 条（需 %d 条），回退到 OneBot 拉取",
+                group_id, len(meaningful), count,
             )
         else:
             logger.info("群 %s 本地缓存为空，使用 OneBot 拉取", group_id)
@@ -635,11 +641,14 @@ class ChatSummary(Star):
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=-2)
     async def handle_group_message_for_summary_cache(self, event: AstrMessageEvent):
-        """Persist target-group messages locally so auto summary does not poll OneBot history."""
+        """Persist target-group messages locally so auto summary does not poll OneBot history.
+
+        消息缓存写入与 auto_summary.enabled 解耦：只要 cache_enabled=true 且群在
+        target_groups 内就持续写 SQLite。enabled 仅控制定时自动总结是否执行，
+        因此可以关闭自动总结但保留本地缓存（手动总结仍能"缓存优先"读取）。
+        """
         settings = self._reload_settings()
         auto_cfg = settings.get("auto_summary", {}) or {}
-        if not auto_cfg.get("enabled"):
-            return
         if auto_cfg.get("cache_enabled", True) is False:
             return
 

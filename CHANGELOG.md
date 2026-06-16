@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.1
+
+### Changed
+
+- Decoupled message-cache writes from `auto_summary.enabled`: as long as `cache_enabled=true` and the group is in `target_groups`, messages are persisted to SQLite even when auto summary is disabled. The `enabled` flag now only controls whether the scheduled auto summary runs.
+
+### Fixed
+
+- Manual summary cache path now over-fetches from the local cache (1.5x, capped at 3000) and filters noise before checking the count, so it returns the most recent `count` meaningful messages and falls back to OneBot only when the cache is genuinely insufficient.
+
 ## 1.7.0
 
 ### Added
